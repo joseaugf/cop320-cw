@@ -187,12 +187,18 @@ aws iam attach-role-policy \
 FLUENT_BIT_ROLE_ARN="arn:aws:iam::${AWS_ACCOUNT_ID}:role/${FLUENT_BIT_ROLE_NAME}"
 echo "Fluent Bit Role ARN: $FLUENT_BIT_ROLE_ARN"
 
-# Update service account annotations
+# Update service account annotations (create if doesn't exist)
 echo "Updating ADOT Collector service account..."
-kubectl annotate serviceaccount adot-collector \
-  -n petshop-demo \
-  eks.amazonaws.com/role-arn=$ROLE_ARN \
-  --overwrite
+if kubectl get serviceaccount adot-collector -n petshop-demo 2>/dev/null; then
+  kubectl annotate serviceaccount adot-collector \
+    -n petshop-demo \
+    eks.amazonaws.com/role-arn=$ROLE_ARN \
+    --overwrite
+  echo "✓ Service account annotated"
+else
+  echo "Service account doesn't exist yet, will be created during deployment"
+  echo "Role ARN to use: $ROLE_ARN"
+fi
 
 # Update Fluent Bit service account
 echo "Updating Fluent Bit service account..."
@@ -203,18 +209,30 @@ kubectl annotate serviceaccount fluent-bit \
 
 # Deploy Application Signals configuration
 echo "Deploying Application Signals configuration..."
-kubectl apply -f k8s/61-application-signals.yaml
+if [ -f "aws/k8s/61-application-signals.yaml" ]; then
+  kubectl apply -f aws/k8s/61-application-signals.yaml
+else
+  echo "Application Signals configuration file not found, skipping..."
+fi
 
 # Deploy Fluent Bit
 echo "Deploying Fluent Bit for CloudWatch Logs..."
-kubectl apply -f k8s/62-fluent-bit-logs.yaml
+if [ -f "aws/k8s/62-fluent-bit-logs.yaml" ]; then
+  kubectl apply -f aws/k8s/62-fluent-bit-logs.yaml
+else
+  echo "Fluent Bit configuration file not found, skipping..."
+fi
 
-# Wait for pods to be ready
-echo "Waiting for ADOT Collector pods to be ready..."
-kubectl rollout status daemonset/adot-collector -n petshop-demo --timeout=300s
+# Wait for pods to be ready (only if deployed)
+if kubectl get daemonset adot-collector -n petshop-demo 2>/dev/null; then
+  echo "Waiting for ADOT Collector pods to be ready..."
+  kubectl rollout status daemonset/adot-collector -n petshop-demo --timeout=300s || echo "ADOT Collector not ready yet"
+fi
 
-echo "Waiting for Fluent Bit pods to be ready..."
-kubectl rollout status daemonset/fluent-bit -n amazon-cloudwatch --timeout=300s
+if kubectl get daemonset fluent-bit -n amazon-cloudwatch 2>/dev/null; then
+  echo "Waiting for Fluent Bit pods to be ready..."
+  kubectl rollout status daemonset/fluent-bit -n amazon-cloudwatch --timeout=300s || echo "Fluent Bit not ready yet"
+fi
 
 echo ""
 echo "✓ Application Signals and CloudWatch Logs setup complete!"
