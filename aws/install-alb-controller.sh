@@ -30,10 +30,38 @@ ALB_POLICY_ARN=$(aws cloudformation describe-stacks \
     --stack-name $STACK_NAME_INFRA \
     --query "Stacks[0].Outputs[?OutputKey=='AWSLoadBalancerControllerPolicyArn'].OutputValue" \
     --output text \
-    --region $AWS_REGION)
+    --region $AWS_REGION 2>&1)
 
-if [ -z "$ALB_POLICY_ARN" ]; then
-    echo -e "${RED}Failed to get ALB Controller Policy ARN. Make sure the stack is updated.${NC}"
+if [ -z "$ALB_POLICY_ARN" ] || [ "$ALB_POLICY_ARN" == "None" ] || [[ "$ALB_POLICY_ARN" == *"error"* ]]; then
+    echo -e "${RED}✗ Failed to get ALB Controller Policy ARN from stack: $STACK_NAME_INFRA${NC}"
+    echo -e "${YELLOW}The CloudFormation stack may not have the AWSLoadBalancerControllerPolicy resource.${NC}"
+    echo ""
+    echo -e "${YELLOW}Checking if stack exists and has the required output...${NC}"
+    
+    # Check if stack exists
+    STACK_STATUS=$(aws cloudformation describe-stacks \
+        --stack-name $STACK_NAME_INFRA \
+        --query "Stacks[0].StackStatus" \
+        --output text \
+        --region $AWS_REGION 2>&1)
+    
+    if [[ "$STACK_STATUS" == *"does not exist"* ]]; then
+        echo -e "${RED}✗ Stack $STACK_NAME_INFRA does not exist${NC}"
+        echo -e "${YELLOW}Run: ./deploy.sh to create the infrastructure${NC}"
+        exit 1
+    fi
+    
+    echo -e "${YELLOW}Stack exists with status: $STACK_STATUS${NC}"
+    echo -e "${YELLOW}Available outputs:${NC}"
+    aws cloudformation describe-stacks \
+        --stack-name $STACK_NAME_INFRA \
+        --query "Stacks[0].Outputs[].OutputKey" \
+        --output table \
+        --region $AWS_REGION
+    
+    echo ""
+    echo -e "${RED}The AWSLoadBalancerControllerPolicyArn output is missing.${NC}"
+    echo -e "${YELLOW}You need to update the stack with the latest template.${NC}"
     echo -e "${YELLOW}Run: ./update-stack-addons.sh${NC}"
     exit 1
 fi
