@@ -1,0 +1,121 @@
+#!/bin/bash
+
+set -e
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# Load configuration
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/config.sh"
+
+echo -e "${GREEN}=== Installing AWS Load Balancer Controller ===${NC}"
+echo ""
+
+# Check prerequisites
+echo -e "${YELLOW}Checking prerequisites...${NC}"
+command -v helm >/dev/null 2>&1 || { echo -e "${RED}Helm is required but not installed. Install from https://helm.sh/docs/intro/install/${NC}" >&2; exit 1; }
+command -v kubectl >/dev/null 2>&1 || { echo -e "${RED}kubectl is required but not installed.${NC}" >&2; exit 1; }
+command -v eksctl >/dev/null 2>&1 || { echo -e "${RED}eksctl is required but not installed.${NC}" >&2; exit 1; }
+
+echo -e "${GREEN}✓ Prerequisites met${NC}"
+echo ""
+
+# Get IAM Policy ARN from CloudFormation
+echo -e "${YELLOW}Step 1: Getting IAM Policy ARN from CloudFormation...${NC}"
+ALB_POLICY_ARN=$(aws cloudformation describe-stacks \
+    --stack-name $STACK_NAME_INFRA \
+    --query "Stacks[0].Outputs[?OutputKey=='AWSLoadBalancerControllerPolicyArn'].OutputValue" \
+    --output text \
+    --region $AWS_REGION)
+
+if [ -z "$ALB_POLICY_ARN" ]; then
+    echo -e "${RED}Failed to get ALB Controller Policy ARN. Make sure the stack is updated.${NC}"
+    echo -e "${YELLOW}Run: ./update-stack-addons.sh${NC}"
+    exit 1
+fi
+
+echo -e "${GREEN}✓ ALB Controller Policy ARN: ${ALB_POLICY_ARN}${NC}"
+echo ""
+
+# Create IAM Role via eksctl (IRSA)
+echo -e "${YELLOW}Step 2: Creating IAM Role for ALB Controller via eksctl...${NC}"
+eksctl create iamserviceaccount \
+    --cluster=$CLUSTER_NAME \
+    --namespace=kube-system \
+    --name=aws-load-balancer-controller \
+    --attach-policy-arn=$ALB_POLICY_ARN \
+    --override-existing-serviceaccounts \
+    --region=$AWS_REGION \
+    --approve
+
+echo -e "${GREEN}✓ IAM Role created via IRSA${NC}"
+echo ""
+
+# Add EKS Helm repository
+echo -e "${YELLOW}Step 2: Adding EKS Helm repository...${NC}"
+helm repo add eks https://aws.github.io/eks-charts
+helm repo update
+echo -e "${GREEN}✓ Helm repository added${NC}"
+echo ""
+
+# Create ServiceAccount
+echo -e "${YELLOW}Step 3: Creating ServiceAccount for AWS Load Balancer Controller...${NC}"
+cat <<EOF | kubectl apply -f -
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  labels:
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/name: aws-load-balancer-controller
+  name: aws-load-balancer-controller
+  namespace: kube-system
+  annotations:
+    eks.amazonaws.com/role-arn: ${ALB_ROLE_ARN}
+EOF
+echo -e "${GREEN}✓ ServiceAccount created${NC}"
+echo ""
+
+# Install AWS Load Balancer Controller
+echo -e "${YELLOW}Step 4: Installing AWS Load Balancer Controller via Helm...${NC}"
+helm upgrade --install aws-load-balancer-controller eks/aws-load-balancer-controller \
+    -n kube-system \
+    --set clusterName=$CLUSTER_NAME \
+    --set serviceAccount.create=false \
+    --set serviceAccount.name=aws-load-balancer-controller \
+    --set region=$AWS_REGION \
+    --set vpcId=$(aws cloudformation describe-stacks \
+        --stack-name $STACK_NAME_INFRA \
+        --query "Stacks[0].Outputs[?OutputKey=='VpcId'].OutputValue" \
+        --output text \
+        --region $AWS_REGION)
+
+echo -e "${GREEN}✓ AWS Load Balancer Controller installed${NC}"
+echo ""
+
+# Wait for deployment
+echo -e "${YELLOW}Step 5: Waiting for AWS Load Balancer Controller to be ready...${NC}"
+kubectl wait --for=condition=available --timeout=300s \
+    deployment/aws-load-balancer-controller \
+    -n kube-system
+
+echo -e "${GREEN}✓ AWS Load Balancer Controller is ready${NC}"
+echo ""
+
+# Verify installation
+echo -e "${YELLOW}Step 6: Verifying installation...${NC}"
+kubectl get deployment -n kube-system aws-load-balancer-controller
+echo ""
+kubectl get pods -n kube-system -l app.kubernetes.io/name=aws-load-balancer-controller
+echo ""
+
+echo -e "${GREEN}=== AWS Load Balancer Controller Installation Complete ===${NC}"
+echo ""
+echo -e "${GREEN}Next steps:${NC}"
+echo "1. Create an Ingress resource to use ALB"
+echo "2. Example Ingress annotation: alb.ingress.kubernetes.io/scheme: internet-facing"
+echo "3. View controller logs: kubectl logs -n kube-system deployment/aws-load-balancer-controller"
+echo ""

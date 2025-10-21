@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: petshop-demo
+  labels:
+    name: petshop-demo
+    app: petshop-observability-demo

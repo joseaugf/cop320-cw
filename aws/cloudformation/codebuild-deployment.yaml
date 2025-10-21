@@ -1,0 +1,209 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'CodeBuild project for automated Petshop Demo deployment'
+
+Parameters:
+  GitHubRepo:
+    Type: String
+    Default: 'https://github.com/joseaugf/cop320-demo'
+    Description: GitHub repository URL
+  
+  GitHubBranch:
+    Type: String
+    Default: 'main'
+    Description: GitHub branch to deploy
+  
+  DeploymentRegion:
+    Type: String
+    Default: 'us-east-2'
+    Description: AWS region for deployment
+    AllowedValues:
+      - us-east-1
+      - us-east-2
+      - us-west-1
+      - us-west-2
+      - eu-west-1
+      - eu-central-1
+      - ap-southeast-1
+      - ap-northeast-1
+      - sa-east-1
+
+Resources:
+  # S3 Bucket for artifacts
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'petshop-demo-artifacts-${AWS::AccountId}-${AWS::Region}'
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldArtifacts
+            Status: Enabled
+            ExpirationInDays: 30
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  # CodeBuild Service Role
+  CodeBuildServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'PetshopDemo-CodeBuild-${AWS::Region}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/AdministratorAccess'  # For full deployment capabilities
+      Policies:
+        - PolicyName: CodeBuildBasePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Resource:
+                  - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/*'
+              - Effect: Allow
+                Action:
+                  - 's3:GetObject'
+                  - 's3:PutObject'
+                  - 's3:GetBucketLocation'
+                  - 's3:ListBucket'
+                Resource:
+                  - !GetAtt ArtifactBucket.Arn
+                  - !Sub '${ArtifactBucket.Arn}/*'
+
+  # CodeBuild Project
+  DeploymentProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: PetshopDemo-FullDeployment
+      Description: 'Automated deployment of Petshop Observability Demo'
+      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+      Artifacts:
+        Type: S3
+        Location: !Ref ArtifactBucket
+        Name: deployment-artifacts
+        NamespaceType: BUILD_ID
+        Packaging: ZIP
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_LARGE
+        Image: aws/codebuild/standard:7.0
+        PrivilegedMode: true  # Required for Docker
+        EnvironmentVariables:
+          - Name: AWS_DEFAULT_REGION
+            Value: !Ref DeploymentRegion
+          - Name: AWS_REGION
+            Value: !Ref DeploymentRegion
+          - Name: STACK_NAME
+            Value: 'petshop-observability-demo'
+          - Name: CLUSTER_NAME
+            Value: 'petshop-demo-eks'
+          - Name: NAMESPACE
+            Value: 'petshop-demo'
+      Source:
+        Type: GITHUB
+        Location: !Ref GitHubRepo
+        GitCloneDepth: 1
+        BuildSpec: buildspec-full-deploy.yml
+        Auth:
+          Type: OAUTH  # You'll need to connect GitHub in CodeBuild console
+      TimeoutInMinutes: 120
+      QueuedTimeoutInMinutes: 480
+      LogsConfig:
+        CloudWatchLogs:
+          Status: ENABLED
+          GroupName: !Ref CodeBuildLogGroup
+      Cache:
+        Type: S3
+        Location: !Sub '${ArtifactBucket}/cache'
+
+  # CloudWatch Log Group
+  CodeBuildLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/codebuild/PetshopDemo-FullDeployment
+      RetentionInDays: 7
+
+  # EventBridge Rule for automatic deployment (optional)
+  # Uncomment to enable automatic deployment on push to main branch
+  # DeploymentTrigger:
+  #   Type: AWS::Events::Rule
+  #   Properties:
+  #     Name: PetshopDemo-AutoDeploy
+  #     Description: 'Trigger deployment on GitHub push'
+  #     EventPattern:
+  #       source:
+  #         - aws.codebuild
+  #       detail-type:
+  #         - CodeBuild Build State Change
+  #       detail:
+  #         build-status:
+  #           - SUCCEEDED
+  #     State: ENABLED
+  #     Targets:
+  #       - Arn: !GetAtt DeploymentProject.Arn
+  #         RoleArn: !GetAtt EventBridgeRole.Arn
+  #         Id: TriggerCodeBuild
+
+  # EventBridge Role (if using automatic trigger)
+  # EventBridgeRole:
+  #   Type: AWS::IAM::Role
+  #   Properties:
+  #     AssumeRolePolicyDocument:
+  #       Version: '2012-10-17'
+  #       Statement:
+  #         - Effect: Allow
+  #           Principal:
+  #             Service: events.amazonaws.com
+  #           Action: 'sts:AssumeRole'
+  #     Policies:
+  #       - PolicyName: StartBuildPolicy
+  #         PolicyDocument:
+  #           Version: '2012-10-17'
+  #           Statement:
+  #             - Effect: Allow
+  #               Action:
+  #                 - 'codebuild:StartBuild'
+  #               Resource: !GetAtt DeploymentProject.Arn
+
+Outputs:
+  CodeBuildProjectName:
+    Description: 'CodeBuild project name'
+    Value: !Ref DeploymentProject
+    Export:
+      Name: !Sub '${AWS::StackName}-ProjectName'
+  
+  CodeBuildProjectArn:
+    Description: 'CodeBuild project ARN'
+    Value: !GetAtt DeploymentProject.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-ProjectArn'
+  
+  ArtifactBucketName:
+    Description: 'S3 bucket for build artifacts'
+    Value: !Ref ArtifactBucket
+    Export:
+      Name: !Sub '${AWS::StackName}-ArtifactBucket'
+  
+  StartBuildCommand:
+    Description: 'Command to start a build'
+    Value: !Sub 'aws codebuild start-build --project-name ${DeploymentProject} --region ${AWS::Region}'
+  
+  ConsoleURL:
+    Description: 'CodeBuild console URL'
+    Value: !Sub 'https://console.aws.amazon.com/codesuite/codebuild/${AWS::AccountId}/projects/${DeploymentProject}?region=${AWS::Region}'

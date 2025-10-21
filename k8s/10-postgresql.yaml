@@ -1,0 +1,147 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgresql-pvc
+  namespace: petshop-demo
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: gp3
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgresql-init
+  namespace: petshop-demo
+data:
+  init.sql: |
+    -- Create products table
+    CREATE TABLE IF NOT EXISTS products (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        name VARCHAR(255) NOT NULL,
+        description TEXT,
+        price DECIMAL(10,2) NOT NULL,
+        category VARCHAR(50) NOT NULL,
+        image_url VARCHAR(500),
+        stock INTEGER DEFAULT 0,
+        created_at TIMESTAMP DEFAULT NOW()
+    );
+
+    -- Create orders table
+    CREATE TABLE IF NOT EXISTS orders (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        session_id VARCHAR(255) NOT NULL,
+        customer_email VARCHAR(255),
+        shipping_address TEXT,
+        total DECIMAL(10,2) NOT NULL,
+        status VARCHAR(50) NOT NULL,
+        created_at TIMESTAMP DEFAULT NOW()
+    );
+
+    -- Create order items table
+    CREATE TABLE IF NOT EXISTS order_items (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        order_id UUID REFERENCES orders(id) ON DELETE CASCADE,
+        product_id UUID REFERENCES products(id),
+        quantity INTEGER NOT NULL,
+        price DECIMAL(10,2) NOT NULL
+    );
+
+    -- Create indexes for better performance
+    CREATE INDEX IF NOT EXISTS idx_products_category ON products(category);
+    CREATE INDEX IF NOT EXISTS idx_orders_session_id ON orders(session_id);
+    CREATE INDEX IF NOT EXISTS idx_orders_created_at ON orders(created_at);
+    CREATE INDEX IF NOT EXISTS idx_order_items_order_id ON order_items(order_id);
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgresql
+  namespace: petshop-demo
+spec:
+  serviceName: postgresql-service
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgresql
+  template:
+    metadata:
+      labels:
+        app: postgresql
+    spec:
+      containers:
+      - name: postgresql
+        image: postgres:15-alpine
+        ports:
+        - containerPort: 5432
+          name: postgres
+        env:
+        - name: POSTGRES_DB
+          valueFrom:
+            configMapKeyRef:
+              name: petshop-config
+              key: POSTGRES_DB
+        - name: POSTGRES_USER
+          valueFrom:
+            secretKeyRef:
+              name: petshop-secrets
+              key: POSTGRES_USER
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: petshop-secrets
+              key: POSTGRES_PASSWORD
+        - name: PGDATA
+          value: /var/lib/postgresql/data/pgdata
+        volumeMounts:
+        - name: postgresql-storage
+          mountPath: /var/lib/postgresql/data
+        - name: init-scripts
+          mountPath: /docker-entrypoint-initdb.d
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          exec:
+            command:
+            - pg_isready
+            - -U
+            - petshop_user
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          exec:
+            command:
+            - pg_isready
+            - -U
+            - petshop_user
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: postgresql-storage
+        persistentVolumeClaim:
+          claimName: postgresql-pvc
+      - name: init-scripts
+        configMap:
+          name: postgresql-init
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgresql-service
+  namespace: petshop-demo
+spec:
+  selector:
+    app: postgresql
+  ports:
+  - port: 5432
+    targetPort: 5432
+    protocol: TCP
+  clusterIP: None

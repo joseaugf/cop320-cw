@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: petshop-config
+  namespace: petshop-demo
+data:
+  # These values will be populated by deployment script from CloudFormation outputs
+  POSTGRES_HOST: "petshop-demo-eks-postgres.cnck6a882b1l.us-east-2.rds.amazonaws.com"
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: "petshop"
+  DATABASE_URL: "postgresql://petshop:Mx_90_23@petshop-demo-eks-postgres.cnck6a882b1l.us-east-2.rds.amazonaws.com:5432/petshop"
+  REDIS_HOST: "pet-re-on97l4gta9v0.jc5j1t.0001.use2.cache.amazonaws.com"
+  REDIS_PORT: "6379"
+  REDIS_URL: "redis://pet-re-on97l4gta9v0.jc5j1t.0001.use2.cache.amazonaws.com:6379"
+  
+  # Service URLs (internal cluster DNS)
+  CATALOG_SERVICE_URL: "http://catalog-service:8001"
+  CART_SERVICE_URL: "http://cart-service:8002"
+  CHECKOUT_SERVICE_URL: "http://checkout-service:8003"
+  FEATURE_FLAG_SERVICE_URL: "http://feature-flag-service:8004"
+  
+  # OpenTelemetry Configuration
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://adot-collector:4318"
+  OTEL_SERVICE_NAME: "petshop-service"
+  OTEL_TRACES_SAMPLER: "always_on"
+  OTEL_METRICS_EXPORTER: "none"
+  OTEL_LOGS_EXPORTER: "none"

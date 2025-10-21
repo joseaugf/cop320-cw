@@ -1,0 +1,51 @@
+# Docker Compose override for development with hot-reload
+# Usage: docker-compose -f docker-compose.yml -f docker-compose.dev.yml up
+
+version: '3.8'
+
+services:
+  catalog-service:
+    build:
+      context: ./catalog-service
+      dockerfile: Dockerfile.dev
+    volumes:
+      - ./catalog-service/src:/app/src
+    command: uvicorn src.main:app --host 0.0.0.0 --port 8001 --reload
+
+  cart-service:
+    build:
+      context: ./cart-service
+      dockerfile: Dockerfile.dev
+    volumes:
+      - ./cart-service/src:/app/src
+      - ./cart-service/node_modules:/app/node_modules
+    command: npm run dev
+
+  checkout-service:
+    build:
+      context: ./checkout-service
+      dockerfile: Dockerfile.dev
+    volumes:
+      - ./checkout-service/src:/app/src
+    command: uvicorn src.main:app --host 0.0.0.0 --port 8003 --reload
+
+  feature-flag-service:
+    build:
+      context: ./feature-flag-service
+      dockerfile: Dockerfile.dev
+    volumes:
+      - ./feature-flag-service/src:/app/src
+      - ./feature-flag-service/node_modules:/app/node_modules
+    command: npm run dev
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+      target: development
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/node_modules:/app/node_modules
+    ports:
+      - "3000:5173"
+    command: npm run dev -- --host 0.0.0.0

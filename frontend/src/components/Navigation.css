@@ -1,0 +1,28 @@
+.navigation {
+  display: flex;
+  gap: 1.5rem;
+  align-items: center;
+}
+
+.nav-link {
+  text-decoration: none;
+  color: #333;
+  font-weight: 500;
+  padding: 0.5rem 1rem;
+  border-radius: 4px;
+  transition: background-color 0.2s, color 0.2s;
+}
+
+.nav-link:hover {
+  background-color: #f0f0f0;
+  color: #4a90e2;
+}
+
+.admin-link {
+  background-color: #f0f0f0;
+  border: 1px solid #ddd;
+}
+
+.admin-link:hover {
+  background-color: #e0e0e0;
+}

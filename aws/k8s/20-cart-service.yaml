@@ -1,0 +1,109 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cart-service
+  namespace: petshop-demo
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: cart-service
+  template:
+    metadata:
+      labels:
+        app: cart-service
+    spec:
+      serviceAccountName: petshop-services
+      containers:
+      - name: cart-service
+        image: 590183851389.dkr.ecr.us-east-2.amazonaws.com/petshop-demo/cart-service:latest
+        ports:
+        - containerPort: 8002
+        env:
+        - name: REDIS_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: petshop-config
+              key: REDIS_HOST
+        - name: REDIS_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: petshop-config
+              key: REDIS_PORT
+        - name: REDIS_URL
+          valueFrom:
+            configMapKeyRef:
+              name: petshop-config
+              key: REDIS_URL
+        - name: FEATURE_FLAG_SERVICE_URL
+          valueFrom:
+            configMapKeyRef:
+              name: petshop-config
+              key: FEATURE_FLAG_SERVICE_URL
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          valueFrom:
+            configMapKeyRef:
+              name: petshop-config
+              key: OTEL_EXPORTER_OTLP_ENDPOINT
+        - name: OTEL_SERVICE_NAME
+          value: "cart-service"
+        - name: PORT
+          value: "8002"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8002
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8002
+          initialDelaySeconds: 10
+          periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cart-service
+  namespace: petshop-demo
+spec:
+  selector:
+    app: cart-service
+  ports:
+  - port: 8002
+    targetPort: 8002
+  type: ClusterIP
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: cart-service-hpa
+  namespace: petshop-demo
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: cart-service
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80

@@ -1,0 +1,122 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: catalog-service
+  namespace: petshop-demo
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: catalog-service
+  template:
+    metadata:
+      labels:
+        app: catalog-service
+    spec:
+      serviceAccountName: petshop-services
+      containers:
+      - name: catalog-service
+        image: 590183851389.dkr.ecr.us-east-2.amazonaws.com/petshop-demo/catalog-service:latest
+        ports:
+        - containerPort: 8001
+        env:
+        - name: POSTGRES_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: petshop-config
+              key: POSTGRES_HOST
+        - name: POSTGRES_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: petshop-config
+              key: POSTGRES_PORT
+        - name: POSTGRES_DB
+          valueFrom:
+            configMapKeyRef:
+              name: petshop-config
+              key: POSTGRES_DB
+        - name: POSTGRES_USER
+          valueFrom:
+            secretKeyRef:
+              name: petshop-secrets
+              key: POSTGRES_USER
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: petshop-secrets
+              key: POSTGRES_PASSWORD
+        - name: DATABASE_URL
+          valueFrom:
+            configMapKeyRef:
+              name: petshop-config
+              key: DATABASE_URL
+        - name: FEATURE_FLAG_SERVICE_URL
+          valueFrom:
+            configMapKeyRef:
+              name: petshop-config
+              key: FEATURE_FLAG_SERVICE_URL
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          valueFrom:
+            configMapKeyRef:
+              name: petshop-config
+              key: OTEL_EXPORTER_OTLP_ENDPOINT
+        - name: OTEL_SERVICE_NAME
+          value: "catalog-service"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8001
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8001
+          initialDelaySeconds: 10
+          periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: catalog-service
+  namespace: petshop-demo
+spec:
+  selector:
+    app: catalog-service
+  ports:
+  - port: 8001
+    targetPort: 8001
+  type: ClusterIP
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: catalog-service-hpa
+  namespace: petshop-demo
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: catalog-service
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80

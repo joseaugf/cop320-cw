@@ -1,0 +1,313 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'CI/CD Pipeline for Petshop Observability Demo'
+
+Parameters:
+  ClusterName:
+    Type: String
+    Default: petshop-demo-eks
+    Description: Name of the EKS cluster
+  
+  GitHubRepo:
+    Type: String
+    Description: GitHub repository name (e.g., username/repo)
+  
+  GitHubBranch:
+    Type: String
+    Default: main
+    Description: GitHub branch to track
+  
+  GitHubToken:
+    Type: String
+    NoEcho: true
+    Description: GitHub personal access token for repository access
+  
+  UseCodeCommit:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: Use CodeCommit instead of GitHub
+
+Conditions:
+  UseGitHub: !Equals [!Ref UseCodeCommit, 'false']
+  UseCodeCommitRepo: !Equals [!Ref UseCodeCommit, 'true']
+
+Resources:
+  # S3 Bucket for Pipeline Artifacts
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub ${ClusterName}-pipeline-artifacts-${AWS::AccountId}
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldArtifacts
+            Status: Enabled
+            ExpirationInDays: 30
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  # CodeCommit Repository (optional)
+  CodeCommitRepository:
+    Type: AWS::CodeCommit::Repository
+    Condition: UseCodeCommitRepo
+    Properties:
+      RepositoryName: !Sub ${ClusterName}-repo
+      RepositoryDescription: Petshop Observability Demo Repository
+
+  # SNS Topic for Pipeline Notifications
+  PipelineNotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub ${ClusterName}-pipeline-notifications
+      DisplayName: Pipeline Notifications
+
+  # IAM Role for CodeBuild
+  CodeBuildServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${ClusterName}-codebuild-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryPowerUser
+      Policies:
+        - PolicyName: CodeBuildPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource:
+                  - !Sub ${ArtifactBucket.Arn}/*
+              - Effect: Allow
+                Action:
+                  - eks:DescribeCluster
+                  - eks:ListClusters
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - sts:AssumeRole
+                Resource: '*'
+
+  # IAM Role for CodePipeline
+  CodePipelineServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${ClusterName}-codepipeline-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CodePipelinePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:GetBucketLocation
+                  - s3:ListBucket
+                Resource:
+                  - !GetAtt ArtifactBucket.Arn
+                  - !Sub ${ArtifactBucket.Arn}/*
+              - Effect: Allow
+                Action:
+                  - codebuild:BatchGetBuilds
+                  - codebuild:StartBuild
+                Resource: !GetAtt CodeBuildProject.Arn
+              - Effect: Allow
+                Action:
+                  - codecommit:GetBranch
+                  - codecommit:GetCommit
+                  - codecommit:UploadArchive
+                  - codecommit:GetUploadArchiveStatus
+                Resource: !If
+                  - UseCodeCommitRepo
+                  - !GetAtt CodeCommitRepository.Arn
+                  - !Ref AWS::NoValue
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource: !Ref PipelineNotificationTopic
+
+  # CodeBuild Project
+  CodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub ${ClusterName}-build
+      Description: Build and deploy Petshop services
+      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_MEDIUM
+        Image: aws/codebuild/standard:7.0
+        PrivilegedMode: true
+        EnvironmentVariables:
+          - Name: AWS_ACCOUNT_ID
+            Value: !Ref AWS::AccountId
+          - Name: AWS_DEFAULT_REGION
+            Value: !Ref AWS::Region
+          - Name: EKS_CLUSTER_NAME
+            Value: !Ref ClusterName
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: aws/buildspec.yml
+      Cache:
+        Type: LOCAL
+        Modes:
+          - LOCAL_DOCKER_LAYER_CACHE
+      LogsConfig:
+        CloudWatchLogs:
+          Status: ENABLED
+          GroupName: !Sub /aws/codebuild/${ClusterName}
+
+  # CodePipeline
+  Pipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: !Sub ${ClusterName}-pipeline
+      RoleArn: !GetAtt CodePipelineServiceRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref ArtifactBucket
+      Stages:
+        - Name: Source
+          Actions:
+            - !If
+              - UseGitHub
+              - Name: SourceAction
+                ActionTypeId:
+                  Category: Source
+                  Owner: ThirdParty
+                  Provider: GitHub
+                  Version: '1'
+                Configuration:
+                  Owner: !Select [0, !Split ['/', !Ref GitHubRepo]]
+                  Repo: !Select [1, !Split ['/', !Ref GitHubRepo]]
+                  Branch: !Ref GitHubBranch
+                  OAuthToken: !Ref GitHubToken
+                  PollForSourceChanges: true
+                OutputArtifacts:
+                  - Name: SourceOutput
+              - Name: SourceAction
+                ActionTypeId:
+                  Category: Source
+                  Owner: AWS
+                  Provider: CodeCommit
+                  Version: '1'
+                Configuration:
+                  RepositoryName: !GetAtt CodeCommitRepository.Name
+                  BranchName: !Ref GitHubBranch
+                  PollForSourceChanges: true
+                OutputArtifacts:
+                  - Name: SourceOutput
+        
+        - Name: Build
+          Actions:
+            - Name: BuildAction
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: '1'
+              Configuration:
+                ProjectName: !Ref CodeBuildProject
+              InputArtifacts:
+                - Name: SourceOutput
+              OutputArtifacts:
+                - Name: BuildOutput
+
+  # CloudWatch Event Rule for Pipeline Notifications
+  PipelineEventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub ${ClusterName}-pipeline-events
+      Description: Notify on pipeline state changes
+      EventPattern:
+        source:
+          - aws.codepipeline
+        detail-type:
+          - CodePipeline Pipeline Execution State Change
+        detail:
+          state:
+            - FAILED
+            - SUCCEEDED
+          pipeline:
+            - !Ref Pipeline
+      State: ENABLED
+      Targets:
+        - Arn: !Ref PipelineNotificationTopic
+          Id: PipelineNotificationTarget
+
+  # SNS Topic Policy
+  PipelineNotificationTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics:
+        - !Ref PipelineNotificationTopic
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sns:Publish
+            Resource: !Ref PipelineNotificationTopic
+
+Outputs:
+  PipelineName:
+    Description: Name of the CodePipeline
+    Value: !Ref Pipeline
+    Export:
+      Name: !Sub ${AWS::StackName}-PipelineName
+
+  PipelineUrl:
+    Description: URL to the CodePipeline console
+    Value: !Sub https://console.aws.amazon.com/codesuite/codepipeline/pipelines/${Pipeline}/view
+
+  ArtifactBucketName:
+    Description: S3 bucket for pipeline artifacts
+    Value: !Ref ArtifactBucket
+    Export:
+      Name: !Sub ${AWS::StackName}-ArtifactBucket
+
+  NotificationTopicArn:
+    Description: SNS Topic ARN for pipeline notifications
+    Value: !Ref PipelineNotificationTopic
+    Export:
+      Name: !Sub ${AWS::StackName}-NotificationTopic
+
+  CodeBuildProjectName:
+    Description: Name of the CodeBuild project
+    Value: !Ref CodeBuildProject
+    Export:
+      Name: !Sub ${AWS::StackName}-CodeBuildProject
+
+  CodeCommitRepositoryUrl:
+    Condition: UseCodeCommitRepo
+    Description: CodeCommit repository clone URL
+    Value: !GetAtt CodeCommitRepository.CloneUrlHttp

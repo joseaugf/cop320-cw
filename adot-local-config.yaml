@@ -1,0 +1,80 @@
+# ADOT Collector configuration for local development
+# This configuration logs telemetry data instead of sending to AWS CloudWatch
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+        cors:
+          allowed_origins:
+            - "*"
+          allowed_headers:
+            - "*"
+
+processors:
+  batch:
+    timeout: 10s
+    send_batch_size: 1024
+  
+  resource:
+    attributes:
+      - key: service.namespace
+        value: petshop-demo
+        action: insert
+      - key: deployment.environment
+        value: local
+        action: insert
+  
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 400
+    spike_limit_mib: 100
+
+exporters:
+  # Log all telemetry to console for local development
+  logging:
+    loglevel: info
+    sampling_initial: 5
+    sampling_thereafter: 200
+  
+  # Optional: Export to local file for debugging
+  file:
+    path: /tmp/otel-data.json
+  
+  # Uncomment these if you want to send to AWS CloudWatch from local
+  # awsxray:
+  #   region: ${AWS_REGION}
+  #   no_verify_ssl: false
+  # 
+  # awscloudwatchlogs:
+  #   region: ${AWS_REGION}
+  #   log_group_name: /aws/petshop-demo-local
+  #   log_stream_name: services
+  # 
+  # awscloudwatch:
+  #   region: ${AWS_REGION}
+  #   namespace: PetshopDemoLocal
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch, resource]
+      exporters: [logging]
+    
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch, resource]
+      exporters: [logging]
+    
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch, resource]
+      exporters: [logging]
+  
+  telemetry:
+    logs:
+      level: info

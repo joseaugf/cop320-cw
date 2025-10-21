@@ -1,0 +1,74 @@
+version: 2.0
+
+defaultLocaleCode: en-US
+
+localeCodes:
+  - en-US
+
+params: {}
+
+additionalLinks:
+  - title: Workshop Feedback Survey
+    link: https://pulse.aws/survey/MI3WE0S7
+
+awsAccountConfig:
+  accountSources:
+    - WorkshopStudio
+
+  participantRole:
+    iamPolicies:
+      - static/iam_policy.json
+
+    managedPolicies:
+      - "arn:aws:iam::aws:policy/AWSCodeBuildReadOnlyAccess"
+      - "arn:aws:iam::aws:policy/AWSCloudShellFullAccess"
+      - "arn:aws:iam::aws:policy/CloudWatchFullAccessV2"
+      - "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy"
+      - "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy"
+      - "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
+
+  ec2KeyPair: false
+
+  regionConfiguration:
+    minAccessibleRegions: 1
+    maxAccessibleRegions: 1
+
+    accessibleRegions:
+      recommended:
+        - us-east-2
+        - us-east-1
+
+      optional:
+        - us-east-1
+        - us-east-2
+        - us-west-2
+        - eu-west-1
+        - ap-southeast-1
+
+    deployableRegions:
+      recommended:
+        - us-east-1
+        - us-east-2
+
+      optional:
+        - us-east-1
+        - us-east-2
+        - us-west-2
+        - eu-west-1
+        - ap-southeast-1
+
+infrastructure:
+  cloudformationTemplates:
+    - templateLocation: static/workshop-infrastructure.yaml
+      label: Petshop Observability Demo - Auto Deployment
+      parameters:
+        - templateParameter: EEAssetsBucket
+          defaultValue: "{{.AssetsBucketName}}"
+        - templateParameter: EEAssetsBucketPrefix
+          defaultValue: "{{.AssetsBucketPrefix}}"
+        - templateParameter: EESourceCodeKey
+          defaultValue: "petshop-demo.zip"
+        - templateParameter: AssetsBucketName
+          defaultValue: "{{.AssetsBucketName}}"
+        - templateParameter: AssetsBucketPrefix
+          defaultValue: "{{.AssetsBucketPrefix}}"

@@ -1,0 +1,83 @@
+# Example: Frontend Ingress with HTTPS/SSL
+# 
+# Prerequisites:
+# 1. Create ACM certificate in AWS Certificate Manager
+# 2. Validate the certificate (DNS or email validation)
+# 3. Get the certificate ARN
+# 4. Replace ACCOUNT_ID and CERT_ID below
+#
+# To use this file:
+# 1. Copy to 35-frontend-ingress.yaml
+# 2. Update the certificate ARN
+# 3. Apply: kubectl apply -f 35-frontend-ingress.yaml
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: frontend-ingress
+  namespace: petshop-demo
+  annotations:
+    # ALB Configuration
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    
+    # SSL/TLS Configuration
+    alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:us-east-2:ACCOUNT_ID:certificate/CERT_ID
+    alb.ingress.kubernetes.io/ssl-policy: ELBSecurityPolicy-TLS-1-2-2017-01
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
+    alb.ingress.kubernetes.io/ssl-redirect: '443'
+    
+    # Health Check Configuration
+    alb.ingress.kubernetes.io/healthcheck-path: /health
+    alb.ingress.kubernetes.io/healthcheck-interval-seconds: '15'
+    alb.ingress.kubernetes.io/healthcheck-timeout-seconds: '5'
+    alb.ingress.kubernetes.io/healthy-threshold-count: '2'
+    alb.ingress.kubernetes.io/unhealthy-threshold-count: '2'
+    
+    # ALB Attributes
+    alb.ingress.kubernetes.io/load-balancer-attributes: idle_timeout.timeout_seconds=60,deletion_protection.enabled=true
+    
+    # Security Headers (optional - requires ALB with HTTP/2)
+    # alb.ingress.kubernetes.io/actions.ssl-redirect: |
+    #   {
+    #     "Type": "redirect",
+    #     "RedirectConfig": {
+    #       "Protocol": "HTTPS",
+    #       "Port": "443",
+    #       "StatusCode": "HTTP_301"
+    #     }
+    #   }
+    
+    # WAF Configuration (optional)
+    # alb.ingress.kubernetes.io/wafv2-acl-arn: arn:aws:wafv2:us-east-2:ACCOUNT_ID:regional/webacl/WAF_NAME/WAF_ID
+    
+    # Access Logs (optional - requires S3 bucket)
+    # alb.ingress.kubernetes.io/load-balancer-attributes: access_logs.s3.enabled=true,access_logs.s3.bucket=my-alb-logs,access_logs.s3.prefix=petshop-frontend
+    
+    # Tags for the ALB
+    alb.ingress.kubernetes.io/tags: Environment=production,Application=petshop,ManagedBy=kubernetes,Project=observability-demo,SSL=enabled
+spec:
+  ingressClassName: alb
+  rules:
+  # Option 1: Default backend (no host specified)
+  - http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: frontend-service
+            port:
+              number: 80
+  
+  # Option 2: With custom domain (uncomment and update)
+  # - host: petshop.example.com
+  #   http:
+  #     paths:
+  #     - path: /
+  #       pathType: Prefix
+  #       backend:
+  #         service:
+  #           name: frontend-service
+  #           port:
+  #             number: 80

@@ -1,0 +1,220 @@
+version: 0.2
+
+env:
+  variables:
+    STACK_NAME: "petshop-observability-demo"
+    CLUSTER_NAME: "petshop-demo-eks"
+    NAMESPACE: "petshop-demo"
+  
+phases:
+  install: 
+    commands:
+      - echo "Installing dependencies..."
+      - pip install --upgrade pip
+      - pip install awscli boto3 pyyaml
+      - npm install -g npm@latest
+      - curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+      - chmod +x kubectl
+      - mv kubectl /usr/local/bin/
+      - curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+      - echo "Installation complete"
+
+  pre_build:
+    commands:
+      - echo "Pre-build phase started on $(date)"
+      - export AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+      - export AWS_REGION=${AWS_DEFAULT_REGION:-us-east-2}
+      - echo "AWS Account ID:" $AWS_ACCOUNT_ID
+      - echo "AWS Region:" $AWS_REGION
+      - echo "Stack Name:" $STACK_NAME
+      - export DB_PASSWORD=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-25)
+      - echo "Generated database password"
+      - |
+        aws secretsmanager create-secret \
+          --name "${STACK_NAME}/db-password" \
+          --secret-string "$DB_PASSWORD" \
+          --region $AWS_REGION 2>/dev/null || \
+        aws secretsmanager update-secret \
+          --secret-id "${STACK_NAME}/db-password" \
+          --secret-string "$DB_PASSWORD" \
+          --region $AWS_REGION
+      
+      - echo "Database password stored in Secrets Manager"
+      - |
+        for service in catalog-service cart-service checkout-service feature-flag-service frontend; do
+          aws ecr describe-repositories --repository-names "petshop-demo/${service}" --region $AWS_REGION 2>/dev/null || \
+          aws ecr create-repository \
+            --repository-name "petshop-demo/${service}" \
+            --image-scanning-configuration scanOnPush=true \
+            --region $AWS_REGION
+        done
+      
+      - echo "ECR repositories ready"
+
+  build:
+    commands:
+      - echo "Build phase started on $(date)"
+      - echo "Deploying CloudFormation stack..."
+      - |
+        aws cloudformation deploy \
+          --template-file aws/cloudformation/eks-infrastructure.yaml \
+          --stack-name $STACK_NAME \
+          --parameter-overrides \
+            ClusterName=$CLUSTER_NAME \
+            DatabasePassword=$DB_PASSWORD \
+          --capabilities CAPABILITY_NAMED_IAM \
+          --region $AWS_REGION \
+          --no-fail-on-empty-changeset
+      
+      - echo "Waiting for stack to be ready..."
+      - aws cloudformation wait stack-create-complete --stack-name $STACK_NAME --region $AWS_REGION 2>/dev/null || true
+      - aws cloudformation wait stack-update-complete --stack-name $STACK_NAME --region $AWS_REGION 2>/dev/null || true
+      - export VPC_ID=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --region $AWS_REGION --query 'Stacks[0].Outputs[?OutputKey==`VPCId`].OutputValue' --output text)
+      - export CLUSTER_NAME=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --region $AWS_REGION --query 'Stacks[0].Outputs[?OutputKey==`ClusterName`].OutputValue' --output text)
+      - export DB_ENDPOINT=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --region $AWS_REGION --query 'Stacks[0].Outputs[?OutputKey==`DatabaseEndpoint`].OutputValue' --output text)
+      - echo "VPC ID:" $VPC_ID
+      - echo "Cluster Name:" $CLUSTER_NAME
+      - echo "DB Endpoint:" $DB_ENDPOINT
+      - echo "Configuring kubectl..."
+      - aws eks update-kubeconfig --name $CLUSTER_NAME --region $AWS_REGION
+      - kubectl version --client
+      - kubectl get nodes
+      - echo "Installing AWS Load Balancer Controller..."
+      - chmod +x aws/install-alb-controller.sh
+      - ./aws/install-alb-controller.sh || echo "ALB Controller may already be installed"
+      - echo "Setting up Application Signals..."
+      - chmod +x aws/setup-application-signals.sh
+      - ./aws/setup-application-signals.sh || echo "Application Signals setup completed"
+      - echo "Building and pushing Docker images..."
+      - aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+      - |
+        for service in catalog-service cart-service checkout-service feature-flag-service frontend; do
+          echo "Building $service..."
+          cd $service
+          if [ -f "package.json" ] && [ ! -f "package-lock.json" ]; then
+            npm install --package-lock-only
+          fi
+          docker buildx build --platform linux/amd64 \
+            -t $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/petshop-demo/${service}:latest \
+            --push .
+          cd ..
+        done
+      - echo "All images built and pushed"
+      - echo "Generating Kubernetes manifests..."
+      - python3 scripts/generate-k8s-manifests.py
+      - echo "Deploying to Kubernetes..."
+      - kubectl create namespace $NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
+      - kubectl apply -f k8s-generated/10-postgresql.yaml
+      - echo "Waiting for PostgreSQL to be ready..."
+      - kubectl wait --for=condition=ready pod -l app=postgresql -n $NAMESPACE --timeout=300s
+      - kubectl apply -f k8s-generated/20-catalog-service.yaml
+      - kubectl apply -f k8s-generated/25-cart-service.yaml
+      - kubectl apply -f k8s-generated/30-checkout-service.yaml
+      - kubectl apply -f k8s-generated/35-feature-flag-service.yaml
+      - kubectl apply -f k8s-generated/30-frontend.yaml
+      - echo "Waiting for services to be ready..."
+      - sleep 30
+      - kubectl wait --for=condition=ready pod -l app=catalog-service -n $NAMESPACE --timeout=300s
+      - kubectl wait --for=condition=ready pod -l app=cart-service -n $NAMESPACE --timeout=300s
+      - kubectl wait --for=condition=ready pod -l app=checkout-service -n $NAMESPACE --timeout=300s
+      - kubectl wait --for=condition=ready pod -l app=feature-flag-service -n $NAMESPACE --timeout=300s
+      - kubectl wait --for=condition=ready pod -l app=frontend -n $NAMESPACE --timeout=300s
+      
+      # Deploy ADOT Collector
+      - kubectl apply -f k8s-generated/40-adot-collector.yaml
+      - kubectl apply -f k8s-generated/60-adot-collector.yaml
+      - kubectl apply -f k8s-generated/61-application-signals.yaml
+      - kubectl apply -f k8s-generated/62-fluent-bit-logs.yaml
+      
+      # Deploy Ingress
+      - kubectl apply -f k8s-generated/35-frontend-ingress.yaml
+      
+      - echo "Waiting for ALB to be provisioned..."
+      - sleep 60
+      
+      # Step 8: Get ALB URL
+      - export ALB_URL=$(kubectl get ingress -n $NAMESPACE frontend-ingress -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+     
+      
+      # Step 9: Create CloudWatch alarms and dashboards
+      - echo "Creating CloudWatch alarms and dashboards..."
+      - chmod +x aws/create-alarms-and-dashboard.sh
+      - ./aws/create-alarms-and-dashboard.sh || echo "Alarms creation completed"
+      
+      - chmod +x aws/create-chaos-alarms.sh
+      - ./aws/create-chaos-alarms.sh || echo "Chaos alarms creation completed"
+      
+      - chmod +x aws/create-log-based-alarms.sh
+      - ./aws/create-log-based-alarms.sh || echo "Log-based alarms creation completed"
+      
+      # Step 10: Wait for ALB to be fully ready
+      - echo "Waiting for ALB to be fully operational..."
+      - |
+        for i in {1..30}; do
+          if curl -s -o /dev/null -w "%{http_code}" "http://$ALB_URL" | grep -q "200\|301\|302"; then
+            echo "ALB is ready!"
+            break
+          fi
+          echo "Waiting for ALB... attempt $i/30"
+          sleep 10
+        done
+      
+      - echo "Deployment complete!"
+
+  post_build:
+    commands:
+      - echo "Post-build phase started on $(date)"
+      
+      # Get final status
+      - kubectl get pods -n $NAMESPACE
+      - kubectl get services -n $NAMESPACE
+      - kubectl get ingress -n $NAMESPACE
+      
+      # Get ALB URL
+      - export ALB_URL=$(kubectl get ingress -n $NAMESPACE frontend-ingress -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+      
+      # Test the application
+      - echo "Testing application endpoints..."
+      - curl -s "http://$ALB_URL/api/products" || echo "Products endpoint test"
+      - curl -s "http://$ALB_URL/api/flags" || echo "Flags endpoint test"
+      
+      # Create deployment summary
+      - |
+        cat > deployment-summary.json <<EOF
+        {
+          "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+          "region": "$AWS_REGION",
+          "account_id": "$AWS_ACCOUNT_ID",
+          "stack_name": "$STACK_NAME",
+          "cluster_name": "$CLUSTER_NAME",
+          "namespace": "$NAMESPACE",
+          "alb_url": "http://$ALB_URL",
+          "vpc_id": "$VPC_ID",
+          "db_endpoint": "$DB_ENDPOINT",
+          "ecr_repositories": [
+            "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/petshop-demo/catalog-service:latest",
+            "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/petshop-demo/cart-service:latest",
+            "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/petshop-demo/checkout-service:latest",
+            "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/petshop-demo/feature-flag-service:latest",
+            "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/petshop-demo/frontend:latest"
+          ],
+          "cloudwatch_dashboard": "https://console.aws.amazon.com/cloudwatch/home?region=$AWS_REGION#dashboards:name=Petshop-Observability-Demo",
+          "cloudwatch_alarms": "https://console.aws.amazon.com/cloudwatch/home?region=$AWS_REGION#alarmsV2:",
+          "xray_service_map": "https://console.aws.amazon.com/xray/home?region=$AWS_REGION#/service-map"
+        }
+        EOF
+      
+      - cat deployment-summary.json
+      
+
+
+artifacts:
+  files:
+    - deployment-summary.json
+    - k8s-generated/**/*
+  name: petshop-demo-deployment-$(date +%Y%m%d-%H%M%S)
+
+cache:
+  paths:
+    - '/root/.npm/**/*'
+    - '/root/.cache/pip/**/*'

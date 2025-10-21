@@ -1,0 +1,215 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: adot-collector-config
+  namespace: petshop-demo
+data:
+  adot-config.yaml: |
+    extensions:
+      health_check:
+      
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+            cors:
+              allowed_origins:
+                - "*"
+    
+    processors:
+      batch:
+        timeout: 10s
+        send_batch_size: 1024
+      
+      memory_limiter:
+        check_interval: 1s
+        limit_mib: 512
+      
+      resourcedetection/eks:
+        detectors: [env, eks]
+        timeout: 2s
+        override: false
+      
+      # Resource processor to add service name
+      resource:
+        attributes:
+          - key: service.name
+            from_attribute: k8s.deployment.name
+            action: insert
+          - key: service.namespace
+            from_attribute: k8s.namespace.name
+            action: insert
+      
+      # Metrics transform for Application Signals
+      metricstransform:
+        transforms:
+          - include: .*
+            match_type: regexp
+            action: update
+            operations:
+              - action: add_label
+                new_label: platform
+                new_value: eks
+    
+    exporters:
+      # X-Ray for traces
+      awsxray:
+        region: ${AWS_REGION}
+        indexed_attributes:
+          - aws.local.service
+          - aws.local.operation
+          - aws.remote.service
+          - aws.remote.operation
+      
+      # CloudWatch EMF for metrics
+      awsemf:
+        region: ${AWS_REGION}
+        namespace: PetshopDemo
+        log_group_name: /aws/eks/petshop-demo/performance
+        dimension_rollup_option: NoDimensionRollup
+        metric_declarations:
+          - dimensions: [[service.name, service.namespace]]
+            metric_name_selectors:
+              - ".*"
+          - dimensions: [[service.name]]
+            metric_name_selectors:
+              - ".*"
+      
+      # CloudWatch Logs for application logs
+      awscloudwatchlogs:
+        region: ${AWS_REGION}
+        log_group_name: /aws/eks/petshop-demo/application
+        log_stream_name: "application-logs"
+      
+    service:
+      extensions: [health_check]
+      pipelines:
+        # Traces pipeline - X-Ray provides service map and traces
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, resourcedetection/eks, resource, batch]
+          exporters: [awsxray]
+        
+        # Metrics pipeline - EMF provides metrics in CloudWatch
+        metrics:
+          receivers: [otlp]
+          processors: [memory_limiter, resourcedetection/eks, resource, metricstransform, batch]
+          exporters: [awsemf]
+        
+        # Logs pipeline
+        logs:
+          receivers: [otlp]
+          processors: [memory_limiter, resourcedetection/eks, batch]
+          exporters: [awscloudwatchlogs]
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: adot-collector
+  namespace: petshop-demo
+spec:
+  selector:
+    matchLabels:
+      app: adot-collector
+  template:
+    metadata:
+      labels:
+        app: adot-collector
+    spec:
+      serviceAccountName: adot-collector
+      containers:
+      - name: adot-collector
+        image: public.ecr.aws/aws-observability/aws-otel-collector:latest
+        command:
+          - "/awscollector"
+          - "--config=/conf/adot-config.yaml"
+        env:
+        - name: AWS_REGION
+          value: "us-east-2"
+        - name: K8S_NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: HOST_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.hostIP
+        - name: HOST_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: K8S_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        ports:
+        - containerPort: 4317  # OTLP gRPC
+          protocol: TCP
+        - containerPort: 4318  # OTLP HTTP
+          protocol: TCP
+        volumeMounts:
+        - name: adot-config
+          mountPath: /conf
+        - name: rootfs
+          mountPath: /rootfs
+          readOnly: true
+        - name: dockersock
+          mountPath: /var/run/docker.sock
+          readOnly: true
+        - name: containerdsock
+          mountPath: /run/containerd/containerd.sock
+          readOnly: true
+        - name: sys
+          mountPath: /sys
+          readOnly: true
+        - name: devdisk
+          mountPath: /dev/disk
+          readOnly: true
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "250m"
+      volumes:
+      - name: adot-config
+        configMap:
+          name: adot-collector-config
+      - name: rootfs
+        hostPath:
+          path: /
+      - name: dockersock
+        hostPath:
+          path: /var/run/docker.sock
+      - name: containerdsock
+        hostPath:
+          path: /run/containerd/containerd.sock
+      - name: sys
+        hostPath:
+          path: /sys
+      - name: devdisk
+        hostPath:
+          path: /dev/disk
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: adot-collector
+  namespace: petshop-demo
+spec:
+  selector:
+    app: adot-collector
+  ports:
+  - name: otlp-grpc
+    port: 4317
+    targetPort: 4317
+    protocol: TCP
+  - name: otlp-http
+    port: 4318
+    targetPort: 4318
+    protocol: TCP
+  type: ClusterIP

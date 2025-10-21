@@ -1,0 +1,29 @@
+# Shared OpenTelemetry Configuration
+# This file contains common OTEL configuration that can be referenced by services
+
+# ADOT Collector endpoint (will be overridden by environment variables)
+otlp_endpoint: "adot-collector:4317"
+
+# Service namespace for all petshop services
+service_namespace: "petshop-demo"
+
+# Common resource attributes
+resource_attributes:
+  deployment.environment: "demo"
+  service.namespace: "petshop-demo"
+
+# Trace configuration
+trace_config:
+  sampler: "always_on"
+  max_attributes_per_span: 128
+  max_events_per_span: 128
+
+# Metric configuration
+metric_config:
+  export_interval_millis: 10000
+  export_timeout_millis: 5000
+
+# Log configuration
+log_config:
+  level: "info"
+  format: "json"

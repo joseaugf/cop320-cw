@@ -1,0 +1,15 @@
+{
+  "description": "OpenTelemetry dependencies for Node.js services",
+  "otelDependencies": {
+    "@opentelemetry/api": "^1.7.0",
+    "@opentelemetry/sdk-node": "^0.45.0",
+    "@opentelemetry/auto-instrumentations-node": "^0.40.0",
+    "@opentelemetry/instrumentation-express": "^0.34.0",
+    "@opentelemetry/instrumentation-http": "^0.45.0",
+    "@opentelemetry/instrumentation-redis-4": "^0.35.0",
+    "@opentelemetry/exporter-trace-otlp-grpc": "^0.45.0",
+    "@opentelemetry/exporter-metrics-otlp-grpc": "^0.45.0",
+    "@opentelemetry/resources": "^1.18.0",
+    "@opentelemetry/semantic-conventions": "^1.18.0"
+  }
+}

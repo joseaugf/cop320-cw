@@ -1,0 +1,204 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: petshop-postgres
+    environment:
+      POSTGRES_DB: petshop
+      POSTGRES_USER: petshop
+      POSTGRES_PASSWORD: petshop123
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U petshop"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - petshop-network
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: petshop-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - petshop-network
+
+  # ADOT Collector (local configuration)
+  adot-collector:
+    image: public.ecr.aws/aws-observability/aws-otel-collector:latest
+    container_name: petshop-adot-collector
+    command: ["--config=/etc/otel-config.yaml"]
+    ports:
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+      - "13133:13133" # Health check
+    volumes:
+      - ./adot-local-config.yaml:/etc/otel-config.yaml:ro
+    environment:
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+    networks:
+      - petshop-network
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:13133/"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Feature Flag Service
+  feature-flag-service:
+    build:
+      context: ./feature-flag-service
+      dockerfile: Dockerfile
+    container_name: petshop-feature-flag-service
+    ports:
+      - "8004:8004"
+    environment:
+      - PORT=8004
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://adot-collector:4317
+      - OTEL_SERVICE_NAME=feature-flag-service
+      - OTEL_RESOURCE_ATTRIBUTES=service.namespace=petshop-demo,deployment.environment=local
+    depends_on:
+      redis:
+        condition: service_healthy
+      adot-collector:
+        condition: service_healthy
+    networks:
+      - petshop-network
+    volumes:
+      - ./feature-flag-service/src:/app/src:ro
+    restart: unless-stopped
+
+  # Catalog Service
+  catalog-service:
+    build:
+      context: ./catalog-service
+      dockerfile: Dockerfile
+    container_name: petshop-catalog-service
+    ports:
+      - "8001:8001"
+    environment:
+      - PORT=8001
+      - DATABASE_URL=postgresql://petshop:petshop123@postgres:5432/petshop
+      - FEATURE_FLAG_SERVICE_URL=http://feature-flag-service:8004
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://adot-collector:4317
+      - OTEL_SERVICE_NAME=catalog-service
+      - OTEL_RESOURCE_ATTRIBUTES=service.namespace=petshop-demo,deployment.environment=local
+    depends_on:
+      postgres:
+        condition: service_healthy
+      feature-flag-service:
+        condition: service_started
+      adot-collector:
+        condition: service_healthy
+    networks:
+      - petshop-network
+    volumes:
+      - ./catalog-service/src:/app/src:ro
+    restart: unless-stopped
+
+  # Cart Service
+  cart-service:
+    build:
+      context: ./cart-service
+      dockerfile: Dockerfile
+    container_name: petshop-cart-service
+    ports:
+      - "8002:8002"
+    environment:
+      - PORT=8002
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - FEATURE_FLAG_SERVICE_URL=http://feature-flag-service:8004
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://adot-collector:4317
+      - OTEL_SERVICE_NAME=cart-service
+      - OTEL_RESOURCE_ATTRIBUTES=service.namespace=petshop-demo,deployment.environment=local
+    depends_on:
+      redis:
+        condition: service_healthy
+      feature-flag-service:
+        condition: service_started
+      adot-collector:
+        condition: service_healthy
+    networks:
+      - petshop-network
+    volumes:
+      - ./cart-service/src:/app/src:ro
+    restart: unless-stopped
+
+  # Checkout Service
+  checkout-service:
+    build:
+      context: ./checkout-service
+      dockerfile: Dockerfile
+    container_name: petshop-checkout-service
+    ports:
+      - "8003:8003"
+    environment:
+      - PORT=8003
+      - DATABASE_URL=postgresql://petshop:petshop123@postgres:5432/petshop
+      - CART_SERVICE_URL=http://cart-service:8002
+      - FEATURE_FLAG_SERVICE_URL=http://feature-flag-service:8004
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://adot-collector:4317
+      - OTEL_SERVICE_NAME=checkout-service
+      - OTEL_RESOURCE_ATTRIBUTES=service.namespace=petshop-demo,deployment.environment=local
+    depends_on:
+      postgres:
+        condition: service_healthy
+      cart-service:
+        condition: service_started
+      feature-flag-service:
+        condition: service_started
+      adot-collector:
+        condition: service_healthy
+    networks:
+      - petshop-network
+    volumes:
+      - ./checkout-service/src:/app/src:ro
+    restart: unless-stopped
+
+  # Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: petshop-frontend
+    ports:
+      - "3000:80"
+    environment:
+      - VITE_CATALOG_SERVICE_URL=http://localhost:8001
+      - VITE_CART_SERVICE_URL=http://localhost:8002
+      - VITE_CHECKOUT_SERVICE_URL=http://localhost:8003
+      - VITE_FEATURE_FLAG_SERVICE_URL=http://localhost:8004
+      - VITE_OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+    depends_on:
+      - catalog-service
+      - cart-service
+      - checkout-service
+      - feature-flag-service
+    networks:
+      - petshop-network
+    restart: unless-stopped
+
+networks:
+  petshop-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:

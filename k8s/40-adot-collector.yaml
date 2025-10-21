@@ -1,0 +1,167 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: adot-collector-config
+  namespace: petshop-demo
+data:
+  adot-config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+            cors:
+              allowed_origins:
+                - "*"
+              allowed_headers:
+                - "*"
+
+    processors:
+      batch:
+        timeout: 10s
+        send_batch_size: 1024
+      
+      resource:
+        attributes:
+          - key: service.namespace
+            value: petshop-demo
+            action: insert
+          - key: deployment.environment
+            value: eks
+            action: insert
+      
+      memory_limiter:
+        check_interval: 1s
+        limit_mib: 400
+        spike_limit_mib: 100
+
+    exporters:
+      awsxray:
+        region: ${AWS_REGION}
+        no_verify_ssl: false
+      
+      awscloudwatchlogs:
+        region: ${AWS_REGION}
+        log_group_name: /aws/petshop-demo
+        log_stream_name: services
+        endpoint: ""
+      
+      awscloudwatch:
+        region: ${AWS_REGION}
+        namespace: PetshopDemo
+        endpoint: ""
+        
+      logging:
+        loglevel: info
+
+    service:
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, batch, resource]
+          exporters: [awsxray, logging]
+        
+        metrics:
+          receivers: [otlp]
+          processors: [memory_limiter, batch, resource]
+          exporters: [awscloudwatch, logging]
+        
+        logs:
+          receivers: [otlp]
+          processors: [memory_limiter, batch, resource]
+          exporters: [awscloudwatchlogs, logging]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: adot-collector
+  namespace: petshop-demo
+spec:
+  selector:
+    app: adot-collector
+  ports:
+  - name: otlp-grpc
+    port: 4317
+    targetPort: 4317
+    protocol: TCP
+  - name: otlp-http
+    port: 4318
+    targetPort: 4318
+    protocol: TCP
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: adot-collector
+  namespace: petshop-demo
+spec:
+  selector:
+    matchLabels:
+      app: adot-collector
+  template:
+    metadata:
+      labels:
+        app: adot-collector
+    spec:
+      serviceAccountName: adot-collector
+      containers:
+      - name: adot-collector
+        image: public.ecr.aws/aws-observability/aws-otel-collector:latest
+        imagePullPolicy: IfNotPresent
+        command:
+        - /awscollector
+        - --config=/conf/adot-config.yaml
+        ports:
+        - containerPort: 4317
+          name: otlp-grpc
+          protocol: TCP
+        - containerPort: 4318
+          name: otlp-http
+          protocol: TCP
+        env:
+        - name: AWS_REGION
+          value: "us-east-1"
+        - name: K8S_NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: K8S_POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: K8S_POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        volumeMounts:
+        - name: adot-config
+          mountPath: /conf
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "200m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 13133
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 13133
+          initialDelaySeconds: 10
+          periodSeconds: 5
+      volumes:
+      - name: adot-config
+        configMap:
+          name: adot-collector-config
+          items:
+          - key: adot-config.yaml
+            path: adot-config.yaml
