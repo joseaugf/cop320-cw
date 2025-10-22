@@ -83,15 +83,11 @@ kubectl apply -f 03-serviceaccount.yaml
 
 print_warning "Remember to update ServiceAccount annotations with your IAM role ARNs!"
 
-# Step 4: Deploy PostgreSQL
-print_info "Deploying PostgreSQL..."
-kubectl apply -f 10-postgresql.yaml
-wait_for_statefulset petshop-demo postgresql 300
+# Step 4: Skip PostgreSQL (using RDS from CloudFormation)
+print_info "Skipping PostgreSQL deployment (using RDS from CloudFormation)..."
 
-# Step 5: Deploy Redis
-print_info "Deploying Redis..."
-kubectl apply -f 11-redis.yaml
-wait_for_deployment petshop-demo redis 180
+# Step 5: Skip Redis (using ElastiCache from CloudFormation)
+print_info "Skipping Redis deployment (using ElastiCache from CloudFormation)..."
 
 # Step 6: Deploy ADOT Collector
 print_info "Deploying ADOT Collector..."
@@ -120,14 +116,19 @@ print_info "Deploying Frontend..."
 kubectl apply -f 30-frontend.yaml
 wait_for_deployment petshop-demo frontend 180
 
-# Step 9: Get LoadBalancer URL
-print_info "Getting LoadBalancer URL..."
-sleep 10  # Give LoadBalancer time to provision
+# Step 9: Deploy Ingress (ALB)
+print_info "Deploying Ingress (ALB)..."
+kubectl apply -f 35-frontend-ingress.yaml
+print_info "Ingress deployed. ALB will be provisioned by AWS Load Balancer Controller..."
 
-FRONTEND_URL=$(kubectl get svc frontend-service -n petshop-demo -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+# Step 10: Get LoadBalancer URL
+print_info "Getting Ingress URL..."
+sleep 30  # Give ALB time to provision
+
+FRONTEND_URL=$(kubectl get ingress frontend-ingress -n petshop-demo -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
 
 if [ -z "$FRONTEND_URL" ]; then
-    FRONTEND_URL=$(kubectl get svc frontend-service -n petshop-demo -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+    FRONTEND_URL=$(kubectl get ingress frontend-ingress -n petshop-demo -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
 fi
 
 print_info "Deployment completed successfully!"
@@ -137,8 +138,8 @@ echo ""
 print_info "Namespace: petshop-demo"
 echo ""
 print_info "Services deployed:"
-echo "  - PostgreSQL (StatefulSet)"
-echo "  - Redis (Deployment)"
+echo "  - PostgreSQL (RDS - managed by CloudFormation)"
+echo "  - Redis (ElastiCache - managed by CloudFormation)"
 echo "  - ADOT Collector (DaemonSet)"
 echo "  - Catalog Service (2 replicas)"
 echo "  - Cart Service (2 replicas)"
@@ -151,8 +152,9 @@ if [ -n "$FRONTEND_URL" ]; then
     print_info "Frontend URL: http://$FRONTEND_URL"
     print_info "Admin Panel: http://$FRONTEND_URL/admin"
 else
-    print_warning "LoadBalancer URL not yet available. Run the following command to get it:"
-    echo "  kubectl get svc frontend-service -n petshop-demo"
+    print_warning "ALB URL not yet available. It may take 2-3 minutes to provision."
+    print_warning "Run the following command to get it:"
+    echo "  kubectl get ingress frontend-ingress -n petshop-demo"
 fi
 
 echo ""
