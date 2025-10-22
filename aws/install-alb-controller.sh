@@ -131,8 +131,21 @@ echo ""
 # Restart deployment to ensure it picks up the correct ServiceAccount
 echo -e "${YELLOW}Step 8: Restarting AWS Load Balancer Controller to apply IRSA...${NC}"
 kubectl rollout restart deployment/aws-load-balancer-controller -n kube-system
+echo "Waiting for pods to restart..."
+sleep 10
 kubectl rollout status deployment/aws-load-balancer-controller -n kube-system --timeout=300s
 echo -e "${GREEN}✓ AWS Load Balancer Controller restarted${NC}"
+echo ""
+
+# Verify IRSA is working
+echo -e "${YELLOW}Step 9: Verifying IRSA configuration...${NC}"
+SA_ROLE=$(kubectl get sa aws-load-balancer-controller -n kube-system -o jsonpath='{.metadata.annotations.eks\.amazonaws\.com/role-arn}')
+if [ -n "$SA_ROLE" ]; then
+    echo -e "${GREEN}✓ ServiceAccount has IAM role annotation: $SA_ROLE${NC}"
+else
+    echo -e "${RED}✗ ServiceAccount missing IAM role annotation${NC}"
+    echo -e "${YELLOW}This may cause permission issues. Check eksctl logs.${NC}"
+fi
 echo ""
 
 echo -e "${GREEN}=== AWS Load Balancer Controller Installation Complete ===${NC}"
