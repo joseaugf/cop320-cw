@@ -69,8 +69,13 @@ fi
 echo -e "${GREEN}✓ ALB Controller Policy ARN: ${ALB_POLICY_ARN}${NC}"
 echo ""
 
-# Create IAM Role via eksctl (IRSA)
-echo -e "${YELLOW}Step 2: Creating IAM Role for ALB Controller via eksctl...${NC}"
+# Delete existing ServiceAccount if it exists (to ensure clean state)
+echo -e "${YELLOW}Step 2: Cleaning up existing ServiceAccount...${NC}"
+kubectl delete sa aws-load-balancer-controller -n kube-system 2>/dev/null || echo "No existing ServiceAccount to delete"
+echo ""
+
+# Create IAM Role via eksctl (IRSA) - this creates both the IAM role and ServiceAccount
+echo -e "${YELLOW}Step 3: Creating IAM Role and ServiceAccount for ALB Controller via eksctl...${NC}"
 eksctl create iamserviceaccount \
     --cluster=$CLUSTER_NAME \
     --namespace=kube-system \
@@ -80,35 +85,18 @@ eksctl create iamserviceaccount \
     --region=$AWS_REGION \
     --approve
 
-echo -e "${GREEN}✓ IAM Role created via IRSA${NC}"
+echo -e "${GREEN}✓ IAM Role and ServiceAccount created via IRSA${NC}"
 echo ""
 
 # Add EKS Helm repository
-echo -e "${YELLOW}Step 2: Adding EKS Helm repository...${NC}"
+echo -e "${YELLOW}Step 4: Adding EKS Helm repository...${NC}"
 helm repo add eks https://aws.github.io/eks-charts
 helm repo update
 echo -e "${GREEN}✓ Helm repository added${NC}"
 echo ""
 
-# Create ServiceAccount
-echo -e "${YELLOW}Step 3: Creating ServiceAccount for AWS Load Balancer Controller...${NC}"
-cat <<EOF | kubectl apply -f -
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  labels:
-    app.kubernetes.io/component: controller
-    app.kubernetes.io/name: aws-load-balancer-controller
-  name: aws-load-balancer-controller
-  namespace: kube-system
-  annotations:
-    eks.amazonaws.com/role-arn: ${ALB_ROLE_ARN}
-EOF
-echo -e "${GREEN}✓ ServiceAccount created${NC}"
-echo ""
-
 # Install AWS Load Balancer Controller
-echo -e "${YELLOW}Step 4: Installing AWS Load Balancer Controller via Helm...${NC}"
+echo -e "${YELLOW}Step 5: Installing AWS Load Balancer Controller via Helm...${NC}"
 helm upgrade --install aws-load-balancer-controller eks/aws-load-balancer-controller \
     -n kube-system \
     --set clusterName=$CLUSTER_NAME \
@@ -125,7 +113,7 @@ echo -e "${GREEN}✓ AWS Load Balancer Controller installed${NC}"
 echo ""
 
 # Wait for deployment
-echo -e "${YELLOW}Step 5: Waiting for AWS Load Balancer Controller to be ready...${NC}"
+echo -e "${YELLOW}Step 6: Waiting for AWS Load Balancer Controller to be ready...${NC}"
 kubectl wait --for=condition=available --timeout=300s \
     deployment/aws-load-balancer-controller \
     -n kube-system
@@ -134,10 +122,17 @@ echo -e "${GREEN}✓ AWS Load Balancer Controller is ready${NC}"
 echo ""
 
 # Verify installation
-echo -e "${YELLOW}Step 6: Verifying installation...${NC}"
+echo -e "${YELLOW}Step 7: Verifying installation...${NC}"
 kubectl get deployment -n kube-system aws-load-balancer-controller
 echo ""
 kubectl get pods -n kube-system -l app.kubernetes.io/name=aws-load-balancer-controller
+echo ""
+
+# Restart deployment to ensure it picks up the correct ServiceAccount
+echo -e "${YELLOW}Step 8: Restarting AWS Load Balancer Controller to apply IRSA...${NC}"
+kubectl rollout restart deployment/aws-load-balancer-controller -n kube-system
+kubectl rollout status deployment/aws-load-balancer-controller -n kube-system --timeout=300s
+echo -e "${GREEN}✓ AWS Load Balancer Controller restarted${NC}"
 echo ""
 
 echo -e "${GREEN}=== AWS Load Balancer Controller Installation Complete ===${NC}"
