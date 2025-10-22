@@ -11,8 +11,8 @@ export AWS_REGION="${AWS_REGION:-us-east-2}"
 export CLUSTER_NAME="${CLUSTER_NAME:-petshop-demo-eks}"
 
 # CloudFormation Stack Names
-export STACK_NAME_INFRA="${STACK_NAME_INFRA:-petshop-observability-demo-v2}"
-export STACK_NAME_CICD="${STACK_NAME_CICD:-petshop-observability-demo-cicd-v2}"
+export STACK_NAME_INFRA="${STACK_NAME_INFRA:-petshop-observability-demo}"
+export STACK_NAME_CICD="${STACK_NAME_CICD:-petshop-observability-demo-cicd}"
 
 # Old stack name (for cleanup)
 export OLD_STACK_NAME="${OLD_STACK_NAME:-petshop-demo-eks-infrastructure}"
