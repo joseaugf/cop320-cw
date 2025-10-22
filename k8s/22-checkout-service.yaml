@@ -16,8 +16,8 @@ spec:
       serviceAccountName: petshop-services
       containers:
       - name: checkout-service
-        image: petshop/checkout-service:latest
-        imagePullPolicy: IfNotPresent
+        image: ${CHECKOUT_IMAGE}
+        imagePullPolicy: Always
         ports:
         - containerPort: 8003
           name: http
