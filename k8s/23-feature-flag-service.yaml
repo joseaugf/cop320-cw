@@ -16,8 +16,8 @@ spec:
       serviceAccountName: petshop-services
       containers:
       - name: feature-flag-service
-        image: petshop/feature-flag-service:latest
-        imagePullPolicy: IfNotPresent
+        image: ${FEATURE_FLAG_IMAGE}
+        imagePullPolicy: Always
         ports:
         - containerPort: 8004
           name: http
