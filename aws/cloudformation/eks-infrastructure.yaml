@@ -285,6 +285,7 @@ Resources:
     Type: AWS::RDS::DBInstance
     Properties:
       DBInstanceIdentifier: !Sub ${ClusterName}-postgres
+      DBName: petshop
       Engine: postgres
       EngineVersion: "17"
       DBInstanceClass: db.t3.micro
