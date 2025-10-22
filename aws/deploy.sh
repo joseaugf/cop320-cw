@@ -118,14 +118,19 @@ print_info "Deploying Frontend..."
 kubectl apply -f 30-frontend.yaml
 wait_for_deployment petshop-demo frontend 180
 
-# Step 9: Get LoadBalancer URL
-print_info "Getting LoadBalancer URL..."
-sleep 10  # Give LoadBalancer time to provision
+# Step 9: Deploy Ingress (ALB)
+print_info "Deploying Ingress (ALB)..."
+kubectl apply -f 35-frontend-ingress.yaml
+print_info "Ingress deployed. ALB will be provisioned by AWS Load Balancer Controller..."
 
-FRONTEND_URL=$(kubectl get svc frontend-service -n petshop-demo -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+# Step 10: Get LoadBalancer URL
+print_info "Getting Ingress URL..."
+sleep 30  # Give ALB time to provision
+
+FRONTEND_URL=$(kubectl get ingress frontend-ingress -n petshop-demo -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
 
 if [ -z "$FRONTEND_URL" ]; then
-    FRONTEND_URL=$(kubectl get svc frontend-service -n petshop-demo -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+    FRONTEND_URL=$(kubectl get ingress frontend-ingress -n petshop-demo -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
 fi
 
 print_info "Deployment completed successfully!"
@@ -149,8 +154,9 @@ if [ -n "$FRONTEND_URL" ]; then
     print_info "Frontend URL: http://$FRONTEND_URL"
     print_info "Admin Panel: http://$FRONTEND_URL/admin"
 else
-    print_warning "LoadBalancer URL not yet available. Run the following command to get it:"
-    echo "  kubectl get svc frontend-service -n petshop-demo"
+    print_warning "ALB URL not yet available. It may take 2-3 minutes to provision."
+    print_warning "Run the following command to get it:"
+    echo "  kubectl get ingress frontend-ingress -n petshop-demo"
 fi
 
 echo ""
