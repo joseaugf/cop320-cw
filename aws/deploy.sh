@@ -1,8 +1,5 @@
 #!/bin/bash
 
-# Petshop Observability Demo - EKS Deployment Script
-# This script deploys all Kubernetes resources in the correct order
-
 set -e
 
 # Colors for output
@@ -11,163 +8,192 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-# Function to print colored output
-print_info() {
-    echo -e "${GREEN}[INFO]${NC} $1"
-}
+# Load configuration
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/config.sh"
 
-print_warning() {
-    echo -e "${YELLOW}[WARN]${NC} $1"
-}
-
-print_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
-
-# Function to wait for deployment to be ready
-wait_for_deployment() {
-    local namespace=$1
-    local deployment=$2
-    local timeout=${3:-300}
-    
-    print_info "Waiting for deployment $deployment to be ready..."
-    kubectl wait --for=condition=available --timeout=${timeout}s \
-        deployment/$deployment -n $namespace || {
-        print_error "Deployment $deployment failed to become ready"
-        return 1
-    }
-    print_info "Deployment $deployment is ready"
-}
-
-# Function to wait for statefulset to be ready
-wait_for_statefulset() {
-    local namespace=$1
-    local statefulset=$2
-    local timeout=${3:-300}
-    
-    print_info "Waiting for statefulset $statefulset to be ready..."
-    kubectl wait --for=jsonpath='{.status.readyReplicas}'=1 --timeout=${timeout}s \
-        statefulset/$statefulset -n $namespace || {
-        print_error "StatefulSet $statefulset failed to become ready"
-        return 1
-    }
-    print_info "StatefulSet $statefulset is ready"
-}
-
-# Check if kubectl is installed
-if ! command -v kubectl &> /dev/null; then
-    print_error "kubectl is not installed. Please install kubectl first."
-    exit 1
-fi
-
-# Check if connected to a cluster
-if ! kubectl cluster-info &> /dev/null; then
-    print_error "Not connected to a Kubernetes cluster. Please configure kubectl."
-    exit 1
-fi
-
-print_info "Starting deployment of Petshop Observability Demo..."
-
-# Check if k8s-generated directory exists
-if [ ! -d "../k8s-generated" ]; then
-    print_error "k8s-generated directory not found. Run 'python3 scripts/generate-k8s-manifests.py' first."
-    exit 1
-fi
-
-# Step 1: Create namespace
-print_info "Creating namespace..."
-kubectl apply -f ../k8s-generated/00-namespace.yaml
-
-# Step 2: Create ConfigMaps and Secrets
-print_info "Creating ConfigMaps and Secrets..."
-kubectl apply -f ../k8s-generated/01-configmap.yaml
-kubectl apply -f ../k8s-generated/02-secrets.yaml
-
-# Step 3: Create ServiceAccounts
-print_info "Creating ServiceAccounts..."
-kubectl apply -f ../k8s-generated/03-serviceaccount.yaml
-
-print_warning "Remember to update ServiceAccount annotations with your IAM role ARNs!"
-
-# Step 4: Skip PostgreSQL (using RDS from CloudFormation)
-print_info "Skipping PostgreSQL deployment (using RDS from CloudFormation)..."
-
-# Step 5: Skip Redis (using ElastiCache from CloudFormation)
-print_info "Skipping Redis deployment (using ElastiCache from CloudFormation)..."
-
-# Step 6: Deploy ADOT Collector
-print_info "Deploying ADOT Collector..."
-kubectl apply -f ../k8s-generated/60-adot-collector.yaml
-sleep 10  # Give DaemonSet time to start
-
-# Step 7: Deploy microservices
-print_info "Deploying Catalog Service..."
-kubectl apply -f ../k8s-generated/20-catalog-service.yaml
-wait_for_deployment petshop-demo catalog-service 180
-
-print_info "Deploying Cart Service..."
-kubectl apply -f ../k8s-generated/21-cart-service.yaml
-wait_for_deployment petshop-demo cart-service 180
-
-print_info "Deploying Checkout Service..."
-kubectl apply -f ../k8s-generated/22-checkout-service.yaml
-wait_for_deployment petshop-demo checkout-service 180
-
-print_info "Deploying Feature Flag Service..."
-kubectl apply -f ../k8s-generated/23-feature-flag-service.yaml
-wait_for_deployment petshop-demo feature-flag-service 180
-
-# Step 8: Deploy Frontend
-print_info "Deploying Frontend..."
-kubectl apply -f ../k8s-generated/30-frontend.yaml
-wait_for_deployment petshop-demo frontend 180
-
-# Step 9: Deploy Ingress (ALB)
-print_info "Deploying Ingress (ALB)..."
-kubectl apply -f ../k8s-generated/35-frontend-ingress.yaml
-print_info "Ingress deployed. ALB will be provisioned by AWS Load Balancer Controller..."
-
-# Step 10: Get LoadBalancer URL
-print_info "Getting Ingress URL..."
-sleep 30  # Give ALB time to provision
-
-FRONTEND_URL=$(kubectl get ingress frontend-ingress -n petshop-demo -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
-
-if [ -z "$FRONTEND_URL" ]; then
-    FRONTEND_URL=$(kubectl get ingress frontend-ingress -n petshop-demo -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
-fi
-
-print_info "Deployment completed successfully!"
-echo ""
-print_info "=== Deployment Summary ==="
-echo ""
-print_info "Namespace: petshop-demo"
-echo ""
-print_info "Services deployed:"
-echo "  - PostgreSQL (RDS - managed by CloudFormation)"
-echo "  - Redis (ElastiCache - managed by CloudFormation)"
-echo "  - ADOT Collector (DaemonSet)"
-echo "  - Catalog Service (2 replicas)"
-echo "  - Cart Service (2 replicas)"
-echo "  - Checkout Service (2 replicas)"
-echo "  - Feature Flag Service (1 replica)"
-echo "  - Frontend (2 replicas)"
+echo -e "${GREEN}=== Petshop Observability Demo - AWS Deployment ===${NC}"
 echo ""
 
-if [ -n "$FRONTEND_URL" ]; then
-    print_info "Frontend URL: http://$FRONTEND_URL"
-    print_info "Admin Panel: http://$FRONTEND_URL/admin"
+# Check prerequisites
+echo -e "${YELLOW}Checking prerequisites...${NC}"
+command -v aws >/dev/null 2>&1 || { echo -e "${RED}AWS CLI is required but not installed. Aborting.${NC}" >&2; exit 1; }
+command -v kubectl >/dev/null 2>&1 || { echo -e "${RED}kubectl is required but not installed. Aborting.${NC}" >&2; exit 1; }
+command -v eksctl >/dev/null 2>&1 || { echo -e "${RED}eksctl is required but not installed. Aborting.${NC}" >&2; exit 1; }
+
+# Check AWS credentials
+aws sts get-caller-identity >/dev/null 2>&1 || { echo -e "${RED}AWS credentials not configured. Aborting.${NC}" >&2; exit 1; }
+
+AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+echo -e "${GREEN}✓ AWS Account ID: ${AWS_ACCOUNT_ID}${NC}"
+echo -e "${GREEN}✓ Region: ${AWS_REGION}${NC}"
+echo ""
+
+# Function to wait for stack completion
+wait_for_stack() {
+    local stack_name=$1
+    echo -e "${YELLOW}Waiting for stack ${stack_name} to complete...${NC}"
+    aws cloudformation wait stack-create-complete --stack-name $stack_name --region $AWS_REGION 2>/dev/null || \
+    aws cloudformation wait stack-update-complete --stack-name $stack_name --region $AWS_REGION 2>/dev/null
+    echo -e "${GREEN}✓ Stack ${stack_name} completed${NC}"
+}
+
+# Deploy infrastructure stack
+echo -e "${YELLOW}Step 1: Deploying EKS Infrastructure...${NC}"
+if [ -f "parameters.json" ]; then
+    aws cloudformation deploy \
+        --template-file cloudformation/eks-infrastructure.yaml \
+        --stack-name $STACK_NAME_INFRA \
+        --parameter-overrides file://parameters.json \
+        --capabilities CAPABILITY_NAMED_IAM \
+        --region $AWS_REGION
 else
-    print_warning "ALB URL not yet available. It may take 2-3 minutes to provision."
-    print_warning "Run the following command to get it:"
-    echo "  kubectl get ingress frontend-ingress -n petshop-demo"
+    echo -e "${YELLOW}No parameters.json found. Using default parameters.${NC}"
+    aws cloudformation deploy \
+        --template-file cloudformation/eks-infrastructure.yaml \
+        --stack-name $STACK_NAME_INFRA \
+        --capabilities CAPABILITY_NAMED_IAM \
+        --region $AWS_REGION
+fi
+
+wait_for_stack $STACK_NAME_INFRA
+echo ""
+
+# Get stack outputs
+echo -e "${YELLOW}Step 2: Retrieving infrastructure details...${NC}"
+RDS_ENDPOINT=$(aws cloudformation describe-stacks --stack-name $STACK_NAME_INFRA --query "Stacks[0].Outputs[?OutputKey=='RDSEndpoint'].OutputValue" --output text --region $AWS_REGION)
+REDIS_ENDPOINT=$(aws cloudformation describe-stacks --stack-name $STACK_NAME_INFRA --query "Stacks[0].Outputs[?OutputKey=='RedisEndpoint'].OutputValue" --output text --region $AWS_REGION)
+ADOT_POLICY_ARN=$(aws cloudformation describe-stacks --stack-name $STACK_NAME_INFRA --query "Stacks[0].Outputs[?OutputKey=='ADOTCollectorPolicyArn'].OutputValue" --output text --region $AWS_REGION)
+
+echo -e "${GREEN}✓ RDS Endpoint: ${RDS_ENDPOINT}${NC}"
+echo -e "${GREEN}✓ Redis Endpoint: ${REDIS_ENDPOINT}${NC}"
+echo ""
+
+# Configure kubectl
+echo -e "${YELLOW}Step 3: Configuring kubectl...${NC}"
+aws eks update-kubeconfig --name $CLUSTER_NAME --region $AWS_REGION
+echo -e "${GREEN}✓ kubectl configured${NC}"
+echo ""
+
+# Create IRSA for ADOT Collector
+echo -e "${YELLOW}Step 4: Creating IAM Role for Service Account (IRSA)...${NC}"
+eksctl create iamserviceaccount \
+    --name adot-collector \
+    --namespace petshop-demo \
+    --cluster $CLUSTER_NAME \
+    --region $AWS_REGION \
+    --attach-policy-arn $ADOT_POLICY_ARN \
+    --approve \
+    --override-existing-serviceaccounts || echo -e "${YELLOW}IRSA may already exist${NC}"
+echo -e "${GREEN}✓ IRSA created${NC}"
+echo ""
+
+# Get DB password from Secrets Manager
+echo -e "${YELLOW}Step 5: Retrieving database credentials...${NC}"
+DB_PASSWORD=$(aws secretsmanager get-secret-value --secret-id "${STACK_NAME_INFRA}/db-password" --query SecretString --output text --region $AWS_REGION 2>/dev/null || echo "")
+
+if [ -z "$DB_PASSWORD" ]; then
+    echo -e "${RED}Error: Could not retrieve database password from Secrets Manager${NC}"
+    echo -e "${YELLOW}Make sure the secret ${STACK_NAME_INFRA}/db-password exists${NC}"
+    exit 1
+fi
+
+echo -e "${GREEN}✓ Database password retrieved${NC}"
+
+# Update ConfigMap and Secrets with actual values
+echo -e "${YELLOW}Step 6: Updating Kubernetes ConfigMap and Secrets...${NC}"
+sed -i.bak "s/REPLACE_WITH_RDS_ENDPOINT/${RDS_ENDPOINT}/g" k8s/01-configmap.yaml
+sed -i.bak "s/REPLACE_WITH_REDIS_ENDPOINT/${REDIS_ENDPOINT}/g" k8s/01-configmap.yaml
+
+# Update Secrets with actual DB credentials
+sed -i.bak "s/\${DB_PASSWORD}/${DB_PASSWORD}/g" k8s/02-secrets.yaml
+sed -i.bak "s/\${RDS_ENDPOINT}/${RDS_ENDPOINT}/g" k8s/02-secrets.yaml
+
+echo -e "${GREEN}✓ ConfigMap and Secrets updated${NC}"
+echo ""
+
+# Update image references in deployments
+echo -e "${YELLOW}Step 7: Updating Kubernetes manifests with ECR URIs...${NC}"
+for file in k8s/*.yaml; do
+    sed -i.bak "s/ACCOUNT_ID/${AWS_ACCOUNT_ID}/g" $file
+    sed -i.bak "s/REGION/${AWS_REGION}/g" $file
+done
+echo -e "${GREEN}✓ Manifests updated${NC}"
+echo ""
+
+# Deploy Kubernetes resources
+echo -e "${YELLOW}Step 8: Deploying Kubernetes resources...${NC}"
+kubectl apply -f k8s/
+echo -e "${GREEN}✓ Kubernetes resources deployed${NC}"
+echo ""
+
+# Wait for pods to be ready
+echo -e "${YELLOW}Step 9: Waiting for pods to be ready...${NC}"
+kubectl wait --for=condition=ready pod -l app=catalog-service -n petshop-demo --timeout=300s || echo -e "${YELLOW}Catalog service may still be starting${NC}"
+kubectl wait --for=condition=ready pod -l app=cart-service -n petshop-demo --timeout=300s || echo -e "${YELLOW}Cart service may still be starting${NC}"
+kubectl wait --for=condition=ready pod -l app=checkout-service -n petshop-demo --timeout=300s || echo -e "${YELLOW}Checkout service may still be starting${NC}"
+kubectl wait --for=condition=ready pod -l app=feature-flag-service -n petshop-demo --timeout=300s || echo -e "${YELLOW}Feature flag service may still be starting${NC}"
+kubectl wait --for=condition=ready pod -l app=frontend -n petshop-demo --timeout=300s || echo -e "${YELLOW}Frontend may still be starting${NC}"
+echo ""
+
+# Get frontend URL
+echo -e "${YELLOW}Step 10: Getting application URL...${NC}"
+FRONTEND_URL=$(kubectl get svc frontend -n petshop-demo -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+if [ -z "$FRONTEND_URL" ]; then
+    echo -e "${YELLOW}LoadBalancer is still provisioning. Run the following command later to get the URL:${NC}"
+    echo "kubectl get svc frontend -n petshop-demo"
+else
+    echo -e "${GREEN}✓ Application URL: http://${FRONTEND_URL}${NC}"
+fi
+echo ""
+
+# Optional: Deploy CI/CD pipeline
+read -p "Do you want to deploy the CI/CD pipeline? (y/n) " -n 1 -r
+echo
+if [[ $REPLY =~ ^[Yy]$ ]]; then
+    echo -e "${YELLOW}Step 11: Deploying CI/CD Pipeline...${NC}"
+    
+    read -p "Use GitHub (g) or CodeCommit (c)? " -n 1 -r
+    echo
+    
+    if [[ $REPLY =~ ^[Gg]$ ]]; then
+        read -p "Enter GitHub repository (username/repo): " GITHUB_REPO
+        read -p "Enter GitHub branch (default: main): " GITHUB_BRANCH
+        GITHUB_BRANCH=${GITHUB_BRANCH:-main}
+        read -sp "Enter GitHub personal access token: " GITHUB_TOKEN
+        echo
+        
+        aws cloudformation deploy \
+            --template-file cloudformation/cicd-pipeline.yaml \
+            --stack-name $STACK_NAME_CICD \
+            --parameter-overrides \
+                ClusterName=$CLUSTER_NAME \
+                GitHubRepo=$GITHUB_REPO \
+                GitHubBranch=$GITHUB_BRANCH \
+                GitHubToken=$GITHUB_TOKEN \
+                UseCodeCommit=false \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --region $AWS_REGION
+    else
+        aws cloudformation deploy \
+            --template-file cloudformation/cicd-pipeline.yaml \
+            --stack-name $STACK_NAME_CICD \
+            --parameter-overrides \
+                ClusterName=$CLUSTER_NAME \
+                UseCodeCommit=true \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --region $AWS_REGION
+    fi
+    
+    wait_for_stack $STACK_NAME_CICD
+    echo -e "${GREEN}✓ CI/CD Pipeline deployed${NC}"
 fi
 
 echo ""
-print_info "To view all resources:"
-echo "  kubectl get all -n petshop-demo"
+echo -e "${GREEN}=== Deployment Complete ===${NC}"
+echo -e "${GREEN}Next steps:${NC}"
+echo "1. Check pod status: kubectl get pods -n petshop-demo"
+echo "2. View logs: kubectl logs -f <pod-name> -n petshop-demo"
+echo "3. Access application: kubectl get svc frontend -n petshop-demo"
+echo "4. View CloudWatch dashboards in AWS Console"
 echo ""
-print_info "To view logs:"
-echo "  kubectl logs -f deployment/catalog-service -n petshop-demo"
-echo ""
-print_info "To access CloudWatch, ensure your ADOT Collector ServiceAccount has the correct IAM role."
