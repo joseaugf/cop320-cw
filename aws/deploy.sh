@@ -68,59 +68,63 @@ fi
 
 print_info "Starting deployment of Petshop Observability Demo..."
 
+# Check if k8s-generated directory exists
+if [ ! -d "../k8s-generated" ]; then
+    print_error "k8s-generated directory not found. Run 'python3 scripts/generate-k8s-manifests.py' first."
+    exit 1
+fi
+
 # Step 1: Create namespace
 print_info "Creating namespace..."
-kubectl apply -f 00-namespace.yaml
+kubectl apply -f ../k8s-generated/00-namespace.yaml
 
 # Step 2: Create ConfigMaps and Secrets
 print_info "Creating ConfigMaps and Secrets..."
-kubectl apply -f 01-configmap.yaml
-kubectl apply -f 02-secrets.yaml
+kubectl apply -f ../k8s-generated/01-configmap.yaml
+kubectl apply -f ../k8s-generated/02-secrets.yaml
 
 # Step 3: Create ServiceAccounts
 print_info "Creating ServiceAccounts..."
-kubectl apply -f 03-serviceaccount.yaml
+kubectl apply -f ../k8s-generated/03-serviceaccount.yaml
 
 print_warning "Remember to update ServiceAccount annotations with your IAM role ARNs!"
 
 # Step 4: Skip PostgreSQL (using RDS from CloudFormation)
 print_info "Skipping PostgreSQL deployment (using RDS from CloudFormation)..."
 
-# Step 5: Deploy Redis
-print_info "Deploying Redis..."
-kubectl apply -f 11-redis.yaml
-wait_for_deployment petshop-demo redis 180
+# Step 5: Skip Redis (using ElastiCache from CloudFormation)
+print_info "Skipping Redis deployment (using ElastiCache from CloudFormation)..."
 
 # Step 6: Deploy ADOT Collector
 print_info "Deploying ADOT Collector..."
-kubectl apply -f 40-adot-collector.yaml
+kubectl apply -f ../k8s-generated/60-adot-collector.yaml
 sleep 10  # Give DaemonSet time to start
 
 # Step 7: Deploy microservices
 print_info "Deploying Catalog Service..."
-kubectl apply -f 20-catalog-service.yaml
+kubectl apply -f ../k8s-generated/20-catalog-service.yaml
 wait_for_deployment petshop-demo catalog-service 180
 
 print_info "Deploying Cart Service..."
-kubectl apply -f 21-cart-service.yaml
+kubectl apply -f ../k8s-generated/21-cart-service.yaml
 wait_for_deployment petshop-demo cart-service 180
 
 print_info "Deploying Checkout Service..."
-kubectl apply -f 22-checkout-service.yaml
+kubectl apply -f ../k8s-generated/22-checkout-service.yaml
 wait_for_deployment petshop-demo checkout-service 180
 
 print_info "Deploying Feature Flag Service..."
-kubectl apply -f 23-feature-flag-service.yaml
+kubectl apply -f ../k8s-generated/23-feature-flag-service.yaml
 wait_for_deployment petshop-demo feature-flag-service 180
 
 # Step 8: Deploy Frontend
 print_info "Deploying Frontend..."
-kubectl apply -f 30-frontend.yaml
+kubectl apply -f ../k8s-generated/30-frontend.yaml
 wait_for_deployment petshop-demo frontend 180
 
 # Step 9: Deploy Ingress (ALB)
 print_info "Deploying Ingress (ALB)..."
-kubectl apply -f 35-frontend-ingress.yaml
+kubectl apply -f ../k8s-generated/35-frontend-ingress.yaml
 print_info "Ingress deployed. ALB will be provisioned by AWS Load Balancer Controller..."
 
 # Step 10: Get LoadBalancer URL
@@ -141,7 +145,7 @@ print_info "Namespace: petshop-demo"
 echo ""
 print_info "Services deployed:"
 echo "  - PostgreSQL (RDS - managed by CloudFormation)"
-echo "  - Redis (Deployment)"
+echo "  - Redis (ElastiCache - managed by CloudFormation)"
 echo "  - ADOT Collector (DaemonSet)"
 echo "  - Catalog Service (2 replicas)"
 echo "  - Cart Service (2 replicas)"
