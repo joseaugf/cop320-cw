@@ -134,11 +134,16 @@ def main():
     
     # Define manifest files to process
     manifest_mappings = [
+        ('k8s/00-namespace.yaml', 'k8s-generated/00-namespace.yaml'),
+        ('k8s/01-configmap.yaml', 'k8s-generated/01-configmap.yaml'),
+        ('k8s/02-secrets.yaml', 'k8s-generated/02-secrets.yaml'),
+        ('k8s/03-serviceaccount.yaml', 'k8s-generated/03-serviceaccount.yaml'),
         ('k8s/10-postgresql.yaml', 'k8s-generated/10-postgresql.yaml'),
+        ('k8s/11-redis.yaml', 'k8s-generated/11-redis.yaml'),
         ('k8s/20-catalog-service.yaml', 'k8s-generated/20-catalog-service.yaml'),
-        ('k8s/25-cart-service.yaml', 'k8s-generated/25-cart-service.yaml'),
-        ('k8s/30-checkout-service.yaml', 'k8s-generated/30-checkout-service.yaml'),
-        ('k8s/35-feature-flag-service.yaml', 'k8s-generated/35-feature-flag-service.yaml'),
+        ('k8s/21-cart-service.yaml', 'k8s-generated/21-cart-service.yaml'),
+        ('k8s/22-checkout-service.yaml', 'k8s-generated/22-checkout-service.yaml'),
+        ('k8s/23-feature-flag-service.yaml', 'k8s-generated/23-feature-flag-service.yaml'),
         ('k8s/30-frontend.yaml', 'k8s-generated/30-frontend.yaml'),
         ('k8s/35-frontend-ingress.yaml', 'k8s-generated/35-frontend-ingress.yaml'),
         ('k8s/40-adot-collector.yaml', 'k8s-generated/40-adot-collector.yaml'),
