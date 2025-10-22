@@ -74,8 +74,8 @@ echo -e "${YELLOW}Step 2: Cleaning up existing ServiceAccount...${NC}"
 kubectl delete sa aws-load-balancer-controller -n kube-system 2>/dev/null || echo "No existing ServiceAccount to delete"
 echo ""
 
-# Create IAM Role via eksctl (IRSA) - this creates both the IAM role and ServiceAccount
-echo -e "${YELLOW}Step 3: Creating IAM Role and ServiceAccount for ALB Controller via eksctl...${NC}"
+# Create IAM Role via eksctl (IRSA)
+echo -e "${YELLOW}Step 3: Creating IAM Role for ALB Controller via eksctl...${NC}"
 eksctl create iamserviceaccount \
     --cluster=$CLUSTER_NAME \
     --namespace=kube-system \
@@ -85,7 +85,40 @@ eksctl create iamserviceaccount \
     --region=$AWS_REGION \
     --approve
 
-echo -e "${GREEN}✓ IAM Role and ServiceAccount created via IRSA${NC}"
+# Check if ServiceAccount was created by eksctl
+if kubectl get sa aws-load-balancer-controller -n kube-system &>/dev/null; then
+    echo -e "${GREEN}✓ ServiceAccount created by eksctl${NC}"
+else
+    echo -e "${YELLOW}ServiceAccount not created by eksctl, creating manually...${NC}"
+    
+    # Get the IAM role ARN created by eksctl
+    ROLE_ARN=$(aws iam list-roles --query "Roles[?contains(RoleName, 'eksctl-${CLUSTER_NAME}') && contains(RoleName, 'aws-load-balancer-controller')].Arn" --output text --region $AWS_REGION | head -1)
+    
+    if [ -z "$ROLE_ARN" ]; then
+        echo -e "${RED}✗ Could not find IAM role created by eksctl${NC}"
+        echo -e "${YELLOW}Listing roles for debugging:${NC}"
+        aws iam list-roles --query "Roles[?contains(RoleName, 'eksctl')].{Name:RoleName,Arn:Arn}" --output table --region $AWS_REGION | grep -i load-balancer || echo "No matching roles found"
+        exit 1
+    fi
+    
+    echo -e "${GREEN}Found IAM Role: $ROLE_ARN${NC}"
+    
+    # Create ServiceAccount manually with the correct annotation
+    cat <<EOF | kubectl apply -f -
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  labels:
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/name: aws-load-balancer-controller
+  name: aws-load-balancer-controller
+  namespace: kube-system
+  annotations:
+    eks.amazonaws.com/role-arn: ${ROLE_ARN}
+EOF
+    
+    echo -e "${GREEN}✓ ServiceAccount created manually with IAM role annotation${NC}"
+fi
 echo ""
 
 # Add EKS Helm repository
