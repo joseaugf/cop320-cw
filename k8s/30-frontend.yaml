@@ -92,8 +92,8 @@ spec:
     spec:
       containers:
       - name: frontend
-        image: petshop/frontend:latest
-        imagePullPolicy: IfNotPresent
+        image: ${FRONTEND_IMAGE}
+        imagePullPolicy: Always
         ports:
         - containerPort: 80
           name: http
