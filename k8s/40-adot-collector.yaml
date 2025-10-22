@@ -48,10 +48,11 @@ data:
         log_stream_name: services
         endpoint: ""
       
-      awscloudwatch:
+      awsemf:
         region: ${AWS_REGION}
         namespace: PetshopDemo
-        endpoint: ""
+        log_group_name: /aws/petshop-demo/metrics
+        log_stream_name: services
         
       logging:
         loglevel: info
@@ -66,7 +67,7 @@ data:
         metrics:
           receivers: [otlp]
           processors: [memory_limiter, batch, resource]
-          exporters: [awscloudwatch, logging]
+          exporters: [awsemf, logging]
         
         logs:
           receivers: [otlp]
@@ -123,7 +124,7 @@ spec:
           protocol: TCP
         env:
         - name: AWS_REGION
-          value: "us-east-1"
+          value: "${AWS_REGION}"
         - name: K8S_NODE_NAME
           valueFrom:
             fieldRef:
