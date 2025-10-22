@@ -16,8 +16,8 @@ spec:
       serviceAccountName: petshop-services
       containers:
       - name: cart-service
-        image: petshop/cart-service:latest
-        imagePullPolicy: IfNotPresent
+        image: ${CART_IMAGE}
+        imagePullPolicy: Always
         ports:
         - containerPort: 8002
           name: http
