@@ -92,10 +92,12 @@ def main():
     
     # Get stack outputs
     outputs = get_stack_outputs(stack_name, region)
-    db_endpoint = outputs.get('DatabaseEndpoint', os.environ.get('DB_ENDPOINT', 'postgresql.petshop-demo.svc.cluster.local'))
-    vpc_id = outputs.get('VPCId', os.environ.get('VPC_ID', ''))
+    rds_endpoint = outputs.get('RDSEndpoint', os.environ.get('RDS_ENDPOINT', 'postgresql.petshop-demo.svc.cluster.local'))
+    redis_endpoint = outputs.get('RedisEndpoint', os.environ.get('REDIS_ENDPOINT', 'redis.petshop-demo.svc.cluster.local'))
+    vpc_id = outputs.get('VpcId', os.environ.get('VPC_ID', ''))
     
-    print(f"Database Endpoint: {db_endpoint}")
+    print(f"RDS Endpoint: {rds_endpoint}")
+    print(f"Redis Endpoint: {redis_endpoint}")
     print(f"VPC ID: {vpc_id}")
     
     # Get database password
@@ -112,7 +114,9 @@ def main():
         'STACK_NAME': stack_name,
         'CLUSTER_NAME': cluster_name,
         'NAMESPACE': namespace,
-        'DB_ENDPOINT': db_endpoint,
+        'RDS_ENDPOINT': rds_endpoint,
+        'DB_ENDPOINT': rds_endpoint,  # Backward compatibility
+        'REDIS_ENDPOINT': redis_endpoint,
         'DB_PASSWORD': db_password,
         'VPC_ID': vpc_id,
         'ECR_BASE': ecr_base,
@@ -131,11 +135,10 @@ def main():
     # Define manifest files to process
     manifest_mappings = [
         ('k8s/10-postgresql.yaml', 'k8s-generated/10-postgresql.yaml'),
-        ('k8s/11-redis.yaml', 'k8s-generated/11-redis.yaml'),
         ('k8s/20-catalog-service.yaml', 'k8s-generated/20-catalog-service.yaml'),
-        ('k8s/21-cart-service.yaml', 'k8s-generated/21-cart-service.yaml'),
-        ('k8s/22-checkout-service.yaml', 'k8s-generated/22-checkout-service.yaml'),
-        ('k8s/23-feature-flag-service.yaml', 'k8s-generated/23-feature-flag-service.yaml'),
+        ('k8s/25-cart-service.yaml', 'k8s-generated/25-cart-service.yaml'),
+        ('k8s/30-checkout-service.yaml', 'k8s-generated/30-checkout-service.yaml'),
+        ('k8s/35-feature-flag-service.yaml', 'k8s-generated/35-feature-flag-service.yaml'),
         ('k8s/30-frontend.yaml', 'k8s-generated/30-frontend.yaml'),
         ('k8s/35-frontend-ingress.yaml', 'k8s-generated/35-frontend-ingress.yaml'),
         ('k8s/40-adot-collector.yaml', 'k8s-generated/40-adot-collector.yaml'),
@@ -164,7 +167,8 @@ def main():
             'stack_name': stack_name,
             'cluster_name': cluster_name,
             'namespace': namespace,
-            'db_endpoint': db_endpoint,
+            'rds_endpoint': rds_endpoint,
+            'redis_endpoint': redis_endpoint,
             'vpc_id': vpc_id,
             'ecr_base': ecr_base,
         }, f, indent=2)
