@@ -4,13 +4,13 @@ metadata:
   name: petshop-config
   namespace: petshop-demo
 data:
-  # Database configuration
-  POSTGRES_HOST: "postgresql-service"
+  # Database configuration (RDS)
+  POSTGRES_HOST: "${RDS_ENDPOINT}"
   POSTGRES_PORT: "5432"
   POSTGRES_DB: "petshop"
   
-  # Redis configuration
-  REDIS_HOST: "redis-service"
+  # Redis configuration (ElastiCache)
+  REDIS_HOST: "${REDIS_ENDPOINT}"
   REDIS_PORT: "6379"
   
   # ADOT Collector configuration
